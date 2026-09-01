@@ -123,7 +123,7 @@ struct MTFileContextMenu: View {
             Button(mtL("Open")) { MTFileActions.open(node, path: resolvedPath) }
             Button(mtL("Show in Finder")) { MTFileActions.reveal(node, path: resolvedPath) }
             Button(mtL("Open Containing Folder")) { MTFileActions.openContainingFolder(node, path: resolvedPath) }
-            Button(mtL("Get Info")) { MTFileActions.getInfo(node, path: resolvedPath) }
+            Button(mtL("Get Info")) { MTNativeFileActions.showInfo(node, path: resolvedPath) }
             Divider()
             Button(mtL("Copy Path")) { MTFileActions.copyPath(node, path: resolvedPath) }
             Button(mtL("Copy Name")) { MTFileActions.copyName(node) }
@@ -132,7 +132,7 @@ struct MTFileContextMenu: View {
             }
             Divider()
             Button(mtL("Move to Trash"), role: .destructive) {
-                MTFileActions.moveToTrash(node, path: resolvedPath)
+                MTNativeFileActions.moveToTrash(node, path: resolvedPath)
             }
         }
     }
