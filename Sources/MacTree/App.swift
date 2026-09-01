@@ -78,8 +78,6 @@ private let mtTurkishStrings: [String: String] = [
     "Items": "Öğeler",
     "Whole Disk": "Tüm Disk",
     "Folder scope": "Klasör kapsamı",
-    "Limited permissions": "Sınırlı izin",
-    "iCloud skipped": "iCloud atlandı",
     "Scanning items": "Öğe taranıyor",
     "Scanned files in": "Taranan dosya / süre",
     "Hover": "Üzerinde",
@@ -301,7 +299,6 @@ struct MainView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                controller.refreshFullDiskAccess()
                 controller.refreshVolumeSpace()
             }
         }
@@ -337,10 +334,10 @@ struct MainView: View {
             }
 
             Button { controller.openFullDiskAccess() } label: {
-                Label(controller.fullDiskAccess ? mtL("Full Disk Access") : mtL("Grant Full Disk Access"),
-                      systemImage: controller.fullDiskAccess ? "lock.open.fill" : "lock.shield")
+                Label(mtL("Full Disk Access"), systemImage: "lock.shield")
             }
-            .foregroundStyle(controller.fullDiskAccess ? Color.green : Color.secondary)
+            .foregroundStyle(Color.secondary)
+            .help(mtL("Full Disk Access"))
 
             Spacer()
 
@@ -427,22 +424,6 @@ struct MainView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .background((wholeDisk ? Color.blue : Color.secondary).opacity(0.10), in: Capsule())
-
-            if wholeDisk && !controller.fullDiskAccess {
-                Text(mtL("Limited permissions"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.orange)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.orange.opacity(0.11), in: Capsule())
-            }
-
-            Text(mtL("iCloud skipped"))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Color.secondary.opacity(0.1), in: Capsule())
 
             Spacer(minLength: 8)
             if controller.isScanning { ProgressView().controlSize(.small) }
