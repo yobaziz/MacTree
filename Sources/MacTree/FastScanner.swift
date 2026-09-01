@@ -72,6 +72,14 @@ actor MTFastScanner {
             let directoryPath = builders[parentID].path
             currentPath = directoryPath
 
+            // macOS privacy-protected locations (Desktop, Documents, Downloads,
+            // app data, etc.) may otherwise trigger a consent dialog when opened.
+            // isReadableFile(atPath:) lets us test access without causing that
+            // consent prompt. If access is already granted (for example via Full
+            // Disk Access), the directory is scanned normally; otherwise it is
+            // skipped and remains represented by the disk's unmapped space.
+            guard FileManager.default.isReadableFile(atPath: directoryPath) else { continue }
+
             let usedBulk = enumerateBulk(path: directoryPath, buffer: &bulkBuffer) { entry in
                 if Task.isCancelled { return false }
                 guard entry.name != ".", entry.name != ".." else { return true }
