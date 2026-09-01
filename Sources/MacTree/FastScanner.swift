@@ -34,14 +34,20 @@ actor MTFastScanner {
         let rootPath = root.standardizedFileURL.path
         let rootName = root.lastPathComponent.isEmpty ? "Macintosh HD" : root.lastPathComponent
 
+        let volumeTotal: UInt64 = {
+            let values = try? root.resourceValues(forKeys: [.volumeTotalCapacityKey])
+            return values?.volumeTotalCapacity.map { UInt64(max(0, $0)) } ?? 0
+        }()
+        let maxReasonableAllocated = max(mtSafeMultiply(volumeTotal, 4), 4 * 1024 * 1024 * 1024 * 1024)
+        let maxReasonableLogical = max(mtSafeMultiply(volumeTotal, 128), 32 * 1024 * 1024 * 1024 * 1024)
+
         var builders: [Builder] = [
             Builder(id: 0, parentID: nil, name: rootName, path: rootPath, isDirectory: true,
                     logicalSize: 0, allocatedSize: 0, fileCount: 0, modifiedTime: 0, children: [])
         ]
-        // Avoid a second dictionary containing hundreds of thousands of duplicate paths.
         builders.reserveCapacity(rootPath == "/" ? 1_250_000 : 450_000)
 
-        // Queue only node IDs. The directory path already lives in Builder, so it is not duplicated.
+        // Queue node IDs only. Paths already live in Builder, avoiding a second huge path dictionary.
         var directoryQueue: [Int] = [0]
         directoryQueue.reserveCapacity(rootPath == "/" ? 150_000 : 60_000)
         var queueIndex = 0
@@ -60,6 +66,7 @@ actor MTFastScanner {
             let parentID = directoryQueue[queueIndex]
             queueIndex += 1
             guard builders.indices.contains(parentID) else { continue }
+
             let directoryPath = builders[parentID].path
             currentPath = directoryPath
 
@@ -78,21 +85,39 @@ actor MTFastScanner {
                 items = mtSafeAdd(items, 1)
                 sincePublish += 1
 
-                let nodeLogical = isDirectory ? 0 : entry.logicalSize
-                let nodeAllocated = isDirectory ? 0 : entry.allocatedSize
+                var nodeLogical: UInt64 = isDirectory ? 0 : entry.logicalSize
+                var nodeAllocated: UInt64 = isDirectory ? 0 : entry.allocatedSize
+                var nodeModified = entry.modifiedTime
                 let nodeFiles: UInt64 = isDirectory ? 0 : 1
 
+                // A corrupt/shifted metadata record must never poison the whole tree.
+                // Only suspicious outliers pay for a single lstat verification.
+                if !isDirectory && (nodeAllocated > maxReasonableAllocated || nodeLogical > maxReasonableLogical) {
+                    var info = stat()
+                    if fullPath.withCString({ lstat($0, &info) }) == 0 {
+                        nodeLogical = info.st_size > 0 ? UInt64(info.st_size) : 0
+                        nodeAllocated = info.st_blocks > 0 ? UInt64(info.st_blocks) * 512 : nodeLogical
+                        nodeModified = TimeInterval(info.st_mtimespec.tv_sec)
+                    } else {
+                        nodeLogical = 0
+                        nodeAllocated = 0
+                    }
+                }
+
                 if !isDirectory {
+                    if nodeAllocated == 0 && nodeLogical > 0 { nodeAllocated = nodeLogical }
                     files = mtSafeAdd(files, 1)
                     logical = mtSafeAdd(logical, nodeLogical)
                     allocated = mtSafeAdd(allocated, nodeAllocated)
                 }
 
                 let id = builders.count
-                builders.append(Builder(id: id, parentID: parentID, name: entry.name, path: fullPath,
-                                        isDirectory: isDirectory, logicalSize: nodeLogical,
-                                        allocatedSize: nodeAllocated, fileCount: nodeFiles,
-                                        modifiedTime: entry.modifiedTime, children: []))
+                builders.append(
+                    Builder(id: id, parentID: parentID, name: entry.name, path: fullPath,
+                            isDirectory: isDirectory, logicalSize: nodeLogical,
+                            allocatedSize: nodeAllocated, fileCount: nodeFiles,
+                            modifiedTime: nodeModified, children: [])
+                )
                 builders[parentID].children.append(id)
                 if isDirectory { directoryQueue.append(id) }
                 return true
@@ -104,9 +129,11 @@ actor MTFastScanner {
                 for name in names {
                     if Task.isCancelled { throw CancellationError() }
                     guard name != ".", name != ".." else { continue }
+
                     let fullPath = join(directoryPath, name)
                     var info = stat()
                     if fullPath.withCString({ lstat($0, &info) }) != 0 { continue }
+
                     let kind = info.st_mode & mode_t(S_IFMT)
                     if kind == mode_t(S_IFLNK) { continue }
                     let isDirectory = kind == mode_t(S_IFDIR)
@@ -115,9 +142,11 @@ actor MTFastScanner {
 
                     items = mtSafeAdd(items, 1)
                     sincePublish += 1
+
                     let nodeLogical = isDirectory ? 0 : (info.st_size > 0 ? UInt64(info.st_size) : 0)
                     let nodeAllocated = isDirectory ? 0 : (info.st_blocks > 0 ? UInt64(info.st_blocks) * 512 : nodeLogical)
                     let nodeFiles: UInt64 = isDirectory ? 0 : 1
+
                     if !isDirectory {
                         files = mtSafeAdd(files, 1)
                         logical = mtSafeAdd(logical, nodeLogical)
@@ -125,25 +154,28 @@ actor MTFastScanner {
                     }
 
                     let id = builders.count
-                    builders.append(Builder(id: id, parentID: parentID, name: name, path: fullPath,
-                                            isDirectory: isDirectory, logicalSize: nodeLogical,
-                                            allocatedSize: nodeAllocated, fileCount: nodeFiles,
-                                            modifiedTime: TimeInterval(info.st_mtimespec.tv_sec), children: []))
+                    builders.append(
+                        Builder(id: id, parentID: parentID, name: name, path: fullPath,
+                                isDirectory: isDirectory, logicalSize: nodeLogical,
+                                allocatedSize: nodeAllocated, fileCount: nodeFiles,
+                                modifiedTime: TimeInterval(info.st_mtimespec.tv_sec), children: [])
+                    )
                     builders[parentID].children.append(id)
                     if isDirectory { directoryQueue.append(id) }
                 }
             }
 
             if sincePublish >= 50_000 {
-                await progress(MTProgress(items: items, files: files, logical: logical, allocated: allocated,
-                                          currentPath: currentPath,
-                                          elapsed: CFAbsoluteTimeGetCurrent() - started))
+                await progress(
+                    MTProgress(items: items, files: files, logical: logical, allocated: allocated,
+                               currentPath: currentPath, elapsed: CFAbsoluteTimeGetCurrent() - started)
+                )
                 sincePublish = 0
             }
         }
 
         if builders.count > 1 {
-            // Parents are always created before descendants, so reverse order can aggregate in one pass.
+            // Parents are always created before descendants, so reverse order aggregates in one pass.
             for index in stride(from: builders.count - 1, through: 1, by: -1) {
                 guard let parent = builders[index].parentID else { continue }
                 builders[parent].logicalSize = mtSafeAdd(builders[parent].logicalSize, builders[index].logicalSize)
@@ -159,7 +191,6 @@ actor MTFastScanner {
                    modifiedTime: $0.modifiedTime, children: $0.children)
         }
 
-        // Keep the UI cheap: sorting once after the scan is much faster than inserting in order.
         let sizeReference = nodes
         for index in nodes.indices where !nodes[index].children.isEmpty {
             nodes[index].children.sort {
@@ -171,8 +202,10 @@ actor MTFastScanner {
         }
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
-        await progress(MTProgress(items: items, files: files, logical: logical, allocated: allocated,
-                                  currentPath: currentPath, elapsed: elapsed))
+        await progress(
+            MTProgress(items: items, files: files, logical: logical, allocated: allocated,
+                       currentPath: currentPath, elapsed: elapsed)
+        )
         return MTSnapshot(nodes: nodes, rootID: 0, items: items, files: files,
                           logical: logical, allocated: allocated, elapsed: elapsed)
     }
@@ -180,7 +213,7 @@ actor MTFastScanner {
     // Returns false only when the directory cannot use the bulk API at all.
     private func enumerateBulk(path: String, buffer: inout [UInt8], consume: (BulkEntry) -> Bool) -> Bool {
         let fd = path.withCString { Darwin.open($0, O_RDONLY) }
-        guard fd >= 0 else { return true } // Permission denied: keep scan moving, do not duplicate with fallback.
+        guard fd >= 0 else { return true } // Permission denied: keep scan moving.
         defer { Darwin.close(fd) }
 
         var attributes = attrlist()
@@ -204,7 +237,7 @@ actor MTFastScanner {
 
             if count == 0 { return true }
             if count < 0 {
-                // If the filesystem rejected the API before returning anything, use legacy enumeration.
+                // Use legacy enumeration only when bulk was rejected before yielding anything.
                 return gotAnyBatch
             }
             gotAnyBatch = true
@@ -218,24 +251,27 @@ actor MTFastScanner {
                     guard entryStart.distance(to: bufferEnd) >= MemoryLayout<UInt32>.size else { return false }
                     let entryLength = Int(entryStart.loadUnaligned(as: UInt32.self))
                     guard entryLength >= 24, entryLength <= entryStart.distance(to: bufferEnd) else { return false }
+
                     let entryEnd = entryStart.advanced(by: entryLength)
                     var field = entryStart.advanced(by: MemoryLayout<UInt32>.size)
 
-                    guard let returned: attribute_set_t = read(&field, base: entryStart, end: entryEnd) else {
+                    guard let returned: attribute_set_t = read4(&field, base: entryStart, end: entryEnd) else {
                         entryStart = entryEnd
                         continue
                     }
 
                     var name: String?
                     if (returned.commonattr & attrgroup_t(ATTR_CMN_NAME)) != 0 {
-                        field = aligned(field, base: entryStart, alignment: MemoryLayout<attrreference_t>.alignment)
+                        field = align4(field, base: entryStart)
                         guard field.distance(to: entryEnd) >= MemoryLayout<attrreference_t>.size else {
                             entryStart = entryEnd
                             continue
                         }
+
                         let referenceStart = field
                         let reference = field.loadUnaligned(as: attrreference_t.self)
                         field = field.advanced(by: MemoryLayout<attrreference_t>.size)
+
                         let offset = Int(reference.attr_dataoffset)
                         let length = Int(reference.attr_length)
                         if offset >= 0, length > 0 {
@@ -250,32 +286,34 @@ actor MTFastScanner {
 
                     var objectType: UInt32 = 0
                     if (returned.commonattr & attrgroup_t(ATTR_CMN_OBJTYPE)) != 0,
-                       let value: fsobj_type_t = read(&field, base: entryStart, end: entryEnd) {
+                       let value: fsobj_type_t = read4(&field, base: entryStart, end: entryEnd) {
                         objectType = UInt32(value)
                     }
 
                     var modified: TimeInterval = 0
                     if (returned.commonattr & attrgroup_t(ATTR_CMN_MODTIME)) != 0,
-                       let value: timespec = read(&field, base: entryStart, end: entryEnd) {
+                       let value: timespec = read4(&field, base: entryStart, end: entryEnd) {
                         modified = TimeInterval(value.tv_sec) + TimeInterval(value.tv_nsec) / 1_000_000_000
                     }
 
                     var logical: UInt64 = 0
                     var allocated: UInt64 = 0
                     if (returned.fileattr & attrgroup_t(ATTR_FILE_TOTALSIZE)) != 0,
-                       let value: off_t = read(&field, base: entryStart, end: entryEnd), value > 0 {
+                       let value: off_t = read4(&field, base: entryStart, end: entryEnd), value > 0 {
                         logical = UInt64(value)
                     }
                     if (returned.fileattr & attrgroup_t(ATTR_FILE_ALLOCSIZE)) != 0,
-                       let value: off_t = read(&field, base: entryStart, end: entryEnd), value > 0 {
+                       let value: off_t = read4(&field, base: entryStart, end: entryEnd), value > 0 {
                         allocated = UInt64(value)
                     }
                     if allocated == 0 && logical > 0 { allocated = logical }
 
                     if let name, !name.isEmpty {
-                        if !consume(BulkEntry(name: name, objectType: objectType,
-                                              logicalSize: logical, allocatedSize: allocated,
-                                              modifiedTime: modified)) {
+                        if !consume(
+                            BulkEntry(name: name, objectType: objectType,
+                                      logicalSize: logical, allocatedSize: allocated,
+                                      modifiedTime: modified)
+                        ) {
                             return false
                         }
                     }
@@ -283,26 +321,27 @@ actor MTFastScanner {
                 }
                 return true
             }
+
             if !shouldContinue { return true }
         }
     }
 
-    private func read<T>(_ field: inout UnsafeRawPointer,
-                         base: UnsafeRawPointer,
-                         end: UnsafeRawPointer) -> T? {
-        field = aligned(field, base: base, alignment: MemoryLayout<T>.alignment)
+    // Darwin's getattrlist/getattrlistbulk ABI packs every attribute on a
+    // 4-byte boundary, including 64-bit values. Natural Swift alignment (8)
+    // is therefore wrong for timespec/off_t and shifts all following fields.
+    private func read4<T>(_ field: inout UnsafeRawPointer,
+                          base: UnsafeRawPointer,
+                          end: UnsafeRawPointer) -> T? {
+        field = align4(field, base: base)
         guard field.distance(to: end) >= MemoryLayout<T>.size else { return nil }
         let value = field.loadUnaligned(as: T.self)
         field = field.advanced(by: MemoryLayout<T>.size)
         return value
     }
 
-    private func aligned(_ pointer: UnsafeRawPointer,
-                         base: UnsafeRawPointer,
-                         alignment: Int) -> UnsafeRawPointer {
-        guard alignment > 1 else { return pointer }
+    private func align4(_ pointer: UnsafeRawPointer, base: UnsafeRawPointer) -> UnsafeRawPointer {
         let offset = base.distance(to: pointer)
-        let alignedOffset = (offset + alignment - 1) & ~(alignment - 1)
+        let alignedOffset = (offset + 3) & ~3
         return base.advanced(by: alignedOffset)
     }
 
@@ -426,7 +465,12 @@ final class MTFastController: ObservableObject {
                         self.elapsed = update.elapsed
                     }
                 }
-                guard !Task.isCancelled else { self.isScanning = false; return }
+
+                guard !Task.isCancelled else {
+                    self.isScanning = false
+                    return
+                }
+
                 self.nodes = snapshot.nodes
                 self.rootID = snapshot.rootID
                 self.items = snapshot.items
