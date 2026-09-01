@@ -184,22 +184,36 @@ actor MTFastScanner {
             }
         }
 
-        var nodes = builders.map {
-            MTNode(id: $0.id, parentID: $0.parentID, name: $0.name, path: $0.path,
-                   isDirectory: $0.isDirectory, logicalSize: $0.logicalSize,
-                   allocatedSize: $0.allocatedSize, fileCount: $0.fileCount,
-                   modifiedTime: $0.modifiedTime, children: $0.children)
-        }
-
-        let sizeReference = nodes
-        for index in nodes.indices where !nodes[index].children.isEmpty {
-            nodes[index].children.sort {
-                let lhs = sizeReference[$0]
-                let rhs = sizeReference[$1]
-                if lhs.allocatedSize != rhs.allocatedSize { return lhs.allocatedSize > rhs.allocatedSize }
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        // Sort while we still have Builders. The old implementation copied the entire
+        // MTNode array into sizeReference and then mutated nodes, which could trigger a
+        // full 1.2M-node copy-on-write allocation.
+        let sortSizes = builders.map { $0.allocatedSize }
+        let sortNames = builders.map { $0.name }
+        for index in builders.indices where !builders[index].children.isEmpty {
+            builders[index].children.sort {
+                let leftSize = sortSizes[$0]
+                let rightSize = sortSizes[$1]
+                if leftSize != rightSize { return leftSize > rightSize }
+                return sortNames[$0].localizedStandardCompare(sortNames[$1]) == .orderedAscending
             }
         }
+
+        var nodes: [MTNode] = []
+        nodes.reserveCapacity(builders.count)
+        for builder in builders {
+            nodes.append(
+                MTNode(id: builder.id, parentID: builder.parentID, name: builder.name, path: builder.path,
+                       isDirectory: builder.isDirectory, logicalSize: builder.logicalSize,
+                       allocatedSize: builder.allocatedSize, fileCount: builder.fileCount,
+                       modifiedTime: builder.modifiedTime, children: builder.children)
+            )
+        }
+
+        // Release scan-only storage before handing the snapshot to the UI.
+        builders.removeAll(keepingCapacity: false)
+        directoryQueue.removeAll(keepingCapacity: false)
+        bulkBuffer.removeAll(keepingCapacity: false)
+        _ = malloc_zone_pressure_relief(malloc_default_zone(), 0)
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         await progress(
@@ -468,6 +482,7 @@ final class MTFastController: ObservableObject {
 
                 guard !Task.isCancelled else {
                     self.isScanning = false
+                    self.task = nil
                     return
                 }
 
@@ -487,6 +502,7 @@ final class MTFastController: ObservableObject {
                 if !Task.isCancelled { self.errorMessage = error.localizedDescription }
             }
             self.isScanning = false
+            self.task = nil
         }
     }
 
