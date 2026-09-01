@@ -6,6 +6,8 @@ struct MTNode: Identifiable, Hashable, Sendable {
     let id: Int
     let parentID: Int?
     let name: String
+    /// Directories keep their absolute path. Files intentionally keep this empty
+    /// to avoid storing the same parent path hundreds of thousands of times.
     let path: String
     let isDirectory: Bool
     let logicalSize: UInt64
@@ -34,157 +36,49 @@ struct MTSnapshot: Sendable {
     let elapsed: TimeInterval
 }
 
-actor MTScanner {
-    private struct Builder {
-        let id: Int
-        let parentID: Int?
-        let name: String
-        let path: String
-        let isDirectory: Bool
-        var logicalSize: UInt64
-        var allocatedSize: UInt64
-        var fileCount: UInt64
-        let modifiedTime: TimeInterval
-        var children: [Int]
+// MARK: - Paths / permissions
+
+func mtResolvedPath(_ nodeID: Int, nodes: [MTNode]) -> String {
+    guard nodes.indices.contains(nodeID) else { return "" }
+    let node = nodes[nodeID]
+    if !node.path.isEmpty { return node.path }
+
+    guard let parentID = node.parentID, nodes.indices.contains(parentID) else {
+        return node.name
     }
-
-    func scan(root: URL, progress: @escaping @Sendable (MTProgress) async -> Void) async throws -> MTSnapshot {
-        let started = CFAbsoluteTimeGetCurrent()
-        let rootPath = root.standardizedFileURL.path
-        let rootName = root.lastPathComponent.isEmpty ? "Macintosh HD" : root.lastPathComponent
-
-        var builders: [Builder] = [
-            Builder(id: 0, parentID: nil, name: rootName, path: rootPath, isDirectory: true,
-                    logicalSize: 0, allocatedSize: 0, fileCount: 0, modifiedTime: 0, children: [])
-        ]
-        builders.reserveCapacity(rootPath == "/" ? 750_000 : 400_000)
-
-        var directoryIDs: [String: Int] = ["": 0]
-        directoryIDs.reserveCapacity(rootPath == "/" ? 120_000 : 60_000)
-
-        var items: UInt64 = 0
-        var files: UInt64 = 0
-        var logical: UInt64 = 0
-        var allocated: UInt64 = 0
-        var publishCounter = 0
-        var currentPath = rootPath
-
-        guard let enumerator = FileManager.default.enumerator(atPath: rootPath) else {
-            throw NSError(domain: "MacTree", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Selected location could not be scanned."])
-        }
-
-        while let relative = enumerator.nextObject() as? String {
-            if Task.isCancelled { break }
-            items += 1
-            publishCounter += 1
-
-            let fullPath = rootPath == "/" ? "/" + relative : rootPath + "/" + relative
-            currentPath = fullPath
-
-            var info = stat()
-            if fullPath.withCString({ lstat($0, &info) }) != 0 { continue }
-
-            let fileType = info.st_mode & mode_t(S_IFMT)
-            let isDirectory = fileType == mode_t(S_IFDIR)
-            if fileType == mode_t(S_IFLNK) { continue }
-
-            if isDirectory && shouldSkip(relative) {
-                enumerator.skipDescendants()
-                continue
-            }
-
-            let parentRelative: String
-            let name: String
-            if let slash = relative.lastIndex(of: "/") {
-                parentRelative = String(relative[..<slash])
-                name = String(relative[relative.index(after: slash)...])
-            } else {
-                parentRelative = ""
-                name = relative
-            }
-
-            guard let parentID = directoryIDs[parentRelative] else {
-                if isDirectory { enumerator.skipDescendants() }
-                continue
-            }
-
-            let logicalSize: UInt64
-            let allocatedSize: UInt64
-            let fileCount: UInt64
-            if isDirectory {
-                logicalSize = 0
-                allocatedSize = 0
-                fileCount = 0
-            } else {
-                logicalSize = info.st_size > 0 ? UInt64(info.st_size) : 0
-                allocatedSize = info.st_blocks > 0 ? UInt64(info.st_blocks) * 512 : logicalSize
-                fileCount = 1
-                files += 1
-                logical = mtSafeAdd(logical, logicalSize)
-                allocated = mtSafeAdd(allocated, allocatedSize)
-            }
-
-            let id = builders.count
-            builders.append(
-                Builder(id: id, parentID: parentID, name: name, path: fullPath, isDirectory: isDirectory,
-                        logicalSize: logicalSize, allocatedSize: allocatedSize, fileCount: fileCount,
-                        modifiedTime: TimeInterval(info.st_mtimespec.tv_sec), children: [])
-            )
-            builders[parentID].children.append(id)
-            if isDirectory { directoryIDs[relative] = id }
-
-            if publishCounter >= 100_000 {
-                await progress(MTProgress(items: items, files: files, logical: logical, allocated: allocated,
-                                          currentPath: currentPath, elapsed: CFAbsoluteTimeGetCurrent() - started))
-                publishCounter = 0
-            }
-        }
-
-        if builders.count > 1 {
-            for index in stride(from: builders.count - 1, through: 1, by: -1) {
-                guard let parent = builders[index].parentID else { continue }
-                builders[parent].logicalSize = mtSafeAdd(builders[parent].logicalSize, builders[index].logicalSize)
-                builders[parent].allocatedSize = mtSafeAdd(builders[parent].allocatedSize, builders[index].allocatedSize)
-                builders[parent].fileCount = mtSafeAdd(builders[parent].fileCount, builders[index].fileCount)
-            }
-        }
-
-        var nodes = builders.map {
-            MTNode(id: $0.id, parentID: $0.parentID, name: $0.name, path: $0.path,
-                   isDirectory: $0.isDirectory, logicalSize: $0.logicalSize,
-                   allocatedSize: $0.allocatedSize, fileCount: $0.fileCount,
-                   modifiedTime: $0.modifiedTime, children: $0.children)
-        }
-
-        let sizeReference = nodes
-        for index in nodes.indices where !nodes[index].children.isEmpty {
-            nodes[index].children.sort {
-                let lhs = sizeReference[$0]
-                let rhs = sizeReference[$1]
-                if lhs.allocatedSize != rhs.allocatedSize { return lhs.allocatedSize > rhs.allocatedSize }
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-            }
-        }
-
-        let elapsed = CFAbsoluteTimeGetCurrent() - started
-        await progress(MTProgress(items: items, files: files, logical: logical, allocated: allocated,
-                                  currentPath: currentPath, elapsed: elapsed))
-        return MTSnapshot(nodes: nodes, rootID: 0, items: items, files: files,
-                          logical: logical, allocated: allocated, elapsed: elapsed)
-    }
-
-    private func shouldSkip(_ relative: String) -> Bool {
-        if relative == "Volumes" || relative.hasPrefix("Volumes/") { return true }
-        if relative == "dev" || relative.hasPrefix("dev/") { return true }
-        if relative == "System/Volumes" || relative.hasPrefix("System/Volumes/") { return true }
-        let marker = "/" + relative
-        if marker.contains("/Library/CloudStorage") { return true }
-        if marker.contains("/Library/Mobile Documents") { return true }
-        if marker.contains("/Library/Application Support/CloudDocs") { return true }
-        return false
-    }
+    let parent = nodes[parentID]
+    let parentPath = !parent.path.isEmpty ? parent.path : mtResolvedPath(parentID, nodes: nodes)
+    if parentPath == "/" { return "/" + node.name }
+    if parentPath.isEmpty { return node.name }
+    return parentPath + "/" + node.name
 }
+
+func mtResolvedPath(_ node: MTNode, nodes: [MTNode]) -> String {
+    mtResolvedPath(node.id, nodes: nodes)
+}
+
+/// Best-effort Full Disk Access probe. TCC itself is protected, while Mail,
+/// Messages and Safari are useful fallbacks on machines where those folders exist.
+func mtHasFullDiskAccess() -> Bool {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let candidates = [
+        "/Library/Application Support/com.apple.TCC/TCC.db",
+        home + "/Library/Mail",
+        home + "/Library/Messages",
+        home + "/Library/Safari"
+    ]
+
+    for path in candidates where FileManager.default.fileExists(atPath: path) {
+        let fd = path.withCString { Darwin.open($0, O_RDONLY) }
+        if fd >= 0 {
+            Darwin.close(fd)
+            return true
+        }
+    }
+    return false
+}
+
+// MARK: - Search
 
 @MainActor
 final class MTSearchModel: ObservableObject {
@@ -221,19 +115,36 @@ final class MTSearchModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled else { return }
             let lowered = needle.lowercased()
+
             let ids = await Task.detached(priority: .utility) {
                 var hits: [(Int, UInt64)] = []
                 hits.reserveCapacity(750)
+
                 for node in snapshot.dropFirst() {
                     if Task.isCancelled { return [Int]() }
-                    if node.name.lowercased().contains(lowered) || node.path.lowercased().contains(lowered) {
+                    let nameMatches = node.name.lowercased().contains(lowered)
+
+                    var pathMatches = false
+                    if !nameMatches {
+                        if !node.path.isEmpty {
+                            pathMatches = node.path.lowercased().contains(lowered)
+                        } else if let parentID = node.parentID, snapshot.indices.contains(parentID) {
+                            // The filename was already checked, so matching the parent directory
+                            // is enough and avoids constructing a full path for every file.
+                            pathMatches = snapshot[parentID].path.lowercased().contains(lowered)
+                        }
+                    }
+
+                    if nameMatches || pathMatches {
                         hits.append((node.id, node.allocatedSize))
                         if hits.count >= 2500 { break }
                     }
                 }
+
                 hits.sort { $0.1 > $1.1 }
                 return Array(hits.prefix(1000).map { $0.0 })
             }.value
+
             guard !Task.isCancelled, let self else { return }
             self.resultIDs = ids
             self.isSearching = false
@@ -242,151 +153,25 @@ final class MTSearchModel: ObservableObject {
     }
 }
 
-@MainActor
-final class MTController: ObservableObject {
-    @Published var rootURL = URL(fileURLWithPath: "/", isDirectory: true)
-    @Published var nodes: [MTNode] = []
-    @Published var rootID = 0
-    @Published var items: UInt64 = 0
-    @Published var files: UInt64 = 0
-    @Published var logical: UInt64 = 0
-    @Published var allocated: UInt64 = 0
-    @Published var elapsed: TimeInterval = 0
-    @Published var currentPath = ""
-    @Published var isScanning = false
-    @Published var scanVersion = 0
-    @Published var errorMessage: String?
-    @Published var fullDiskAccess = false
-    @Published var volumeTotal: UInt64 = 0
-    @Published var volumeFree: UInt64 = 0
-
-    let search = MTSearchModel()
-    private let scanner = MTScanner()
-    private var task: Task<Void, Never>?
-
-    init() {
-        refreshFullDiskAccess()
-        refreshVolumeSpace()
-    }
-
-    func chooseHome() {
-        rootURL = FileManager.default.homeDirectoryForCurrentUser
-        refreshVolumeSpace()
-    }
-
-    func chooseDisk() {
-        rootURL = URL(fileURLWithPath: "/", isDirectory: true)
-        refreshVolumeSpace()
-    }
-
-    func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose a disk or folder"
-        panel.message = "iCloud and File Provider folders are skipped automatically."
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        if panel.runModal() == .OK, let url = panel.url {
-            rootURL = url
-            refreshVolumeSpace()
-        }
-    }
-
-    func refreshFullDiskAccess() {
-        fullDiskAccess = access("/Library/Application Support/com.apple.TCC/TCC.db", R_OK) == 0
-    }
-
-    func refreshVolumeSpace() {
-        do {
-            let values = try rootURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey])
-            volumeTotal = values.volumeTotalCapacity.map { UInt64(max(0, $0)) } ?? 0
-            volumeFree = values.volumeAvailableCapacity.map { UInt64(max(0, $0)) } ?? 0
-        } catch {
-            volumeTotal = 0
-            volumeFree = 0
-        }
-    }
-
-    func openFullDiskAccess() {
-        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-                NSWorkspace.shared.open(url)
-            }
-        }
-    }
-
-    func start() {
-        task?.cancel()
-        refreshVolumeSpace()
-        nodes = []
-        search.setNodes([])
-        items = 0
-        files = 0
-        logical = 0
-        allocated = 0
-        elapsed = 0
-        currentPath = rootURL.path
-        errorMessage = nil
-        isScanning = true
-
-        let selected = rootURL
-        task = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let snapshot = try await scanner.scan(root: selected) { update in
-                    await MainActor.run {
-                        self.items = update.items
-                        self.files = update.files
-                        self.logical = update.logical
-                        self.allocated = update.allocated
-                        self.currentPath = update.currentPath
-                        self.elapsed = update.elapsed
-                    }
-                }
-                self.nodes = snapshot.nodes
-                self.rootID = snapshot.rootID
-                self.items = snapshot.items
-                self.files = snapshot.files
-                self.logical = snapshot.logical
-                self.allocated = snapshot.allocated
-                self.elapsed = snapshot.elapsed
-                self.search.setNodes(snapshot.nodes)
-                self.refreshVolumeSpace()
-                self.scanVersion += 1
-            } catch {
-                if !Task.isCancelled { self.errorMessage = error.localizedDescription }
-            }
-            self.isScanning = false
-            self.task = nil
-        }
-    }
-
-    func stop() {
-        task?.cancel()
-        task = nil
-        isScanning = false
-    }
-}
+// MARK: - File actions
 
 enum MTFileActions {
-    static func open(_ node: MTNode) {
-        NSWorkspace.shared.open(URL(fileURLWithPath: node.path))
+    static func open(_ node: MTNode, path: String) {
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
-    static func reveal(_ node: MTNode) {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
+    static func reveal(_ node: MTNode, path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
-    static func openContainingFolder(_ node: MTNode) {
-        let url = URL(fileURLWithPath: node.path)
+    static func openContainingFolder(_ node: MTNode, path: String) {
+        let url = URL(fileURLWithPath: path)
         NSWorkspace.shared.open(url.deletingLastPathComponent())
     }
 
-    static func copyPath(_ node: MTNode) {
+    static func copyPath(_ node: MTNode, path: String) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(node.path, forType: .string)
+        NSPasteboard.general.setString(path, forType: .string)
     }
 
     static func copyName(_ node: MTNode) {
@@ -394,22 +179,22 @@ enum MTFileActions {
         NSPasteboard.general.setString(node.name, forType: .string)
     }
 
-    static func openTerminal(_ node: MTNode) {
-        let target = node.isDirectory ? node.path : URL(fileURLWithPath: node.path).deletingLastPathComponent().path
+    static func openTerminal(_ node: MTNode, path: String) {
+        let target = node.isDirectory ? path : URL(fileURLWithPath: path).deletingLastPathComponent().path
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         process.arguments = ["-a", "Terminal", target]
         try? process.run()
     }
 
-    static func getInfo(_ node: MTNode) {
-        let escaped = node.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+    static func getInfo(_ node: MTNode, path: String) {
+        let escaped = appleScriptEscaped(path)
         let script = "tell application \"Finder\" to open information window of (POSIX file \"\(escaped)\" as alias)"
         NSAppleScript(source: script)?.executeAndReturnError(nil)
     }
 
-    static func moveToTrash(_ node: MTNode) {
-        let url = URL(fileURLWithPath: node.path).standardizedFileURL
+    static func moveToTrash(_ node: MTNode, path rawPath: String) {
+        let url = URL(fileURLWithPath: rawPath).standardizedFileURL
         let path = url.path
 
         guard FileManager.default.fileExists(atPath: path) else {
@@ -417,8 +202,6 @@ enum MTFileActions {
             return
         }
 
-        // Never offer to trash filesystem roots. Items below these locations may still
-        // be removable; macOS will decide and we surface its real error if it refuses.
         let protectedRoots: Set<String> = ["/", "/System", "/bin", "/sbin", "/usr", "/private"]
         guard !protectedRoots.contains(path) else {
             showTrashError(node: node, path: path, detail: mtL("macOS protects this system location."))
@@ -434,16 +217,39 @@ enum MTFileActions {
         confirmation.informativeText = "\(node.name)\n\(mtBytes(node.allocatedSize)) • \(fileText)\n\n\(mtL("This item will be moved to the Trash."))"
         confirmation.addButton(withTitle: mtL("Move to Trash"))
         confirmation.addButton(withTitle: mtL("Cancel"))
-
         guard confirmation.runModal() == .alertFirstButtonReturn else { return }
 
         do {
             var resultingURL: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
             NSWorkspace.shared.noteFileSystemChanged(url.deletingLastPathComponent().path)
+            return
         } catch {
-            showTrashError(node: node, path: path, detail: error.localizedDescription)
+            let directError = error.localizedDescription
+            if tryFinderTrash(path: path) {
+                NSWorkspace.shared.noteFileSystemChanged(url.deletingLastPathComponent().path)
+                return
+            }
+            showTrashError(node: node, path: path, detail: directError)
         }
+    }
+
+    /// Finder can request administrator authorization for some writable system-owned
+    /// locations where FileManager simply returns EPERM/EACCES.
+    private static func tryFinderTrash(path: String) -> Bool {
+        let escaped = appleScriptEscaped(path)
+        let source = "tell application \"Finder\" to delete (POSIX file \"\(escaped)\" as alias)"
+        guard let script = NSAppleScript(source: source) else { return false }
+        var errorInfo: NSDictionary?
+        _ = script.executeAndReturnError(&errorInfo)
+        guard errorInfo == nil else { return false }
+        return !FileManager.default.fileExists(atPath: path)
+    }
+
+    private static func appleScriptEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private static func showTrashError(node: MTNode, path: String, detail: String) {
@@ -459,6 +265,8 @@ enum MTFileActions {
         }
     }
 }
+
+// MARK: - Semantic file categories
 
 enum MTCategory: String, CaseIterable {
     case application = "Apps"
@@ -500,9 +308,37 @@ enum MTCategory: String, CaseIterable {
     }
 }
 
-func mtDirectCategory(_ node: MTNode) -> MTCategory {
+func mtDirectCategory(_ node: MTNode, nodes: [MTNode]? = nil) -> MTCategory {
     let name = node.name.lowercased()
-    let path = node.path.lowercased()
+
+    if !node.isDirectory {
+        let ext = (node.name as NSString).pathExtension.lowercased()
+        switch ext {
+        case "app", "appex", "xpc", "exe": return .application
+        case "mp4", "mov", "mkv", "avi", "webm", "m4v", "mpeg", "mpg", "bik", "bink": return .video
+        case "jpg", "jpeg", "png", "heic", "gif", "webp", "tiff", "bmp", "svg", "icns": return .image
+        case "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "dmg", "pkg", "iso", "jar", "asar": return .archive
+        case "mp3", "aac", "m4a", "wav", "flac", "ogg", "aiff", "bank", "caf": return .audio
+        case "pdf", "doc", "docx", "pages", "txt", "rtf", "md", "csv", "xls", "xlsx", "ppt", "pptx": return .document
+        case "swift", "c", "cpp", "cc", "h", "hpp", "js", "ts", "py", "java", "kt", "rs", "go", "rb", "php", "css", "html", "sh", "frag", "vert", "glsl", "metal", "air", "wasm", "map": return .code
+        case "db", "sqlite", "sqlite3", "realm", "mdb", "db-wal", "db-shm": return .database
+        case "ini", "cfg", "conf", "plist", "yaml", "yml", "toml", "json", "xml", "strings", "stringsdict": return .config
+        case "log": return .logs
+        case "pak", "vpk", "wad", "pck", "bundle", "assets", "asset", "res", "ress", "resource", "dat", "bin", "obb", "unity3d", "forge": return .gameData
+        case "dylib", "so", "framework", "kext", "metallib", "car", "mom", "momd", "nib", "storyboardc": return .system
+        default: break
+        }
+    }
+
+    let resolvedPath: String
+    if !node.path.isEmpty {
+        resolvedPath = node.path
+    } else if let nodes {
+        resolvedPath = mtResolvedPath(node.id, nodes: nodes)
+    } else {
+        resolvedPath = ""
+    }
+    let path = resolvedPath.lowercased()
 
     if node.isDirectory {
         if path.contains("/library/caches/") || name == "cache" || name == "caches" || name == "cacheddata" ||
@@ -528,23 +364,6 @@ func mtDirectCategory(_ node: MTNode) -> MTCategory {
         return .other
     }
 
-    let ext = (node.name as NSString).pathExtension.lowercased()
-    switch ext {
-    case "app", "appex", "xpc", "exe": return .application
-    case "mp4", "mov", "mkv", "avi", "webm", "m4v", "mpeg", "mpg", "bik", "bink": return .video
-    case "jpg", "jpeg", "png", "heic", "gif", "webp", "tiff", "bmp", "svg", "icns": return .image
-    case "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "dmg", "pkg", "iso", "jar", "asar": return .archive
-    case "mp3", "aac", "m4a", "wav", "flac", "ogg", "aiff", "bank", "caf": return .audio
-    case "pdf", "doc", "docx", "pages", "txt", "rtf", "md", "csv", "xls", "xlsx", "ppt", "pptx": return .document
-    case "swift", "c", "cpp", "cc", "h", "hpp", "js", "ts", "py", "java", "kt", "rs", "go", "rb", "php", "css", "html", "sh", "frag", "vert", "glsl", "metal", "air", "wasm", "map": return .code
-    case "db", "sqlite", "sqlite3", "realm", "mdb", "db-wal", "db-shm": return .database
-    case "ini", "cfg", "conf", "plist", "yaml", "yml", "toml", "json", "xml", "strings", "stringsdict": return .config
-    case "log": return .logs
-    case "pak", "vpk", "wad", "pck", "bundle", "assets", "asset", "res", "ress", "resource", "dat", "bin", "obb", "unity3d", "forge": return .gameData
-    case "dylib", "so", "framework", "kext", "metallib", "car", "mom", "momd", "nib", "storyboardc": return .system
-    default: break
-    }
-
     if path.contains("/library/caches/") || path.contains("/cache/") { return .cache }
     if path.contains("/library/logs/") { return .logs }
     if path.contains("/library/preferences/") { return .config }
@@ -562,7 +381,7 @@ func mtDirectCategory(_ node: MTNode) -> MTCategory {
 func mtBestCategory(_ nodeID: Int, _ nodes: [MTNode]) -> MTCategory {
     guard nodes.indices.contains(nodeID) else { return .other }
     let node = nodes[nodeID]
-    let direct = mtDirectCategory(node)
+    let direct = mtDirectCategory(node, nodes: nodes)
     if direct != .other { return direct }
     guard node.isDirectory && !node.children.isEmpty else { return .other }
 
@@ -570,12 +389,12 @@ func mtBestCategory(_ nodeID: Int, _ nodes: [MTNode]) -> MTCategory {
     for childID in node.children.prefix(40) {
         guard nodes.indices.contains(childID) else { continue }
         let child = nodes[childID]
-        let category = mtDirectCategory(child)
+        let category = mtDirectCategory(child, nodes: nodes)
         if category == .other && child.isDirectory {
             for grandID in child.children.prefix(10) {
                 guard nodes.indices.contains(grandID) else { continue }
                 let grand = nodes[grandID]
-                let grandCategory = mtDirectCategory(grand)
+                let grandCategory = mtDirectCategory(grand, nodes: nodes)
                 if grandCategory != .other {
                     weights[grandCategory, default: 0] = mtSafeAdd(weights[grandCategory, default: 0], grand.allocatedSize)
                 }
@@ -598,6 +417,8 @@ func mtCategoryForGroup(_ ids: ArraySlice<Int>, _ nodes: [MTNode], fallback: MTC
     }
     return weights.max(by: { $0.value < $1.value })?.key ?? fallback
 }
+
+// MARK: - Utilities
 
 func mtRectFinite(_ rect: CGRect) -> Bool {
     rect.origin.x.isFinite && rect.origin.y.isFinite && rect.size.width.isFinite && rect.size.height.isFinite &&
@@ -630,7 +451,7 @@ func mtEllipsize(_ text: String, maxCharacters: Int) -> String {
 
 func mtFileTypeLabel(_ node: MTNode) -> String {
     let ext = (node.name as NSString).pathExtension.lowercased()
-    return ext.isEmpty ? "File" : ".\(ext)"
+    return ext.isEmpty ? mtL("File") : ".\(ext)"
 }
 
 func mtBytes(_ value: UInt64) -> String {
