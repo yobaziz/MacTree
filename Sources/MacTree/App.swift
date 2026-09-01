@@ -208,3 +208,9 @@ private struct MTSearchField: View {
         }
     }
 }
+
+extension UInt64 {
+    func addingReportingOverflow(by other: UInt64) -> (partialValue: UInt64, overflow: Bool) {
+        addingReportingOverflow(other)
+    }
+}
