@@ -197,6 +197,7 @@ final class MTSearchModel: ObservableObject {
 
     func setNodes(_ newNodes: [MTNode]) {
         task?.cancel()
+        task = nil
         nodes = newNodes
         query = ""
         resultIDs = []
@@ -210,6 +211,7 @@ final class MTSearchModel: ObservableObject {
         guard !needle.isEmpty else {
             resultIDs = []
             isSearching = false
+            task = nil
             return
         }
 
@@ -235,6 +237,7 @@ final class MTSearchModel: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             self.resultIDs = ids
             self.isSearching = false
+            self.task = nil
         }
     }
 }
@@ -356,6 +359,7 @@ final class MTController: ObservableObject {
                 if !Task.isCancelled { self.errorMessage = error.localizedDescription }
             }
             self.isScanning = false
+            self.task = nil
         }
     }
 
@@ -405,10 +409,53 @@ enum MTFileActions {
     }
 
     static func moveToTrash(_ node: MTNode) {
+        let url = URL(fileURLWithPath: node.path).standardizedFileURL
+        let path = url.path
+
+        guard FileManager.default.fileExists(atPath: path) else {
+            showTrashError(node: node, path: path, detail: mtL("The item no longer exists at this location."))
+            return
+        }
+
+        // Never offer to trash filesystem roots. Items below these locations may still
+        // be removable; macOS will decide and we surface its real error if it refuses.
+        let protectedRoots: Set<String> = ["/", "/System", "/bin", "/sbin", "/usr", "/private"]
+        guard !protectedRoots.contains(path) else {
+            showTrashError(node: node, path: path, detail: mtL("macOS protects this system location."))
+            return
+        }
+
+        let confirmation = NSAlert()
+        confirmation.alertStyle = .warning
+        confirmation.messageText = mtL("Move to Trash?")
+        let fileText = node.isDirectory
+            ? "\(node.fileCount.formatted()) \(mtL("files"))"
+            : mtL("File")
+        confirmation.informativeText = "\(node.name)\n\(mtBytes(node.allocatedSize)) • \(fileText)\n\n\(mtL("This item will be moved to the Trash."))"
+        confirmation.addButton(withTitle: mtL("Move to Trash"))
+        confirmation.addButton(withTitle: mtL("Cancel"))
+
+        guard confirmation.runModal() == .alertFirstButtonReturn else { return }
+
         do {
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: node.path), resultingItemURL: nil)
+            var resultingURL: NSURL?
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            NSWorkspace.shared.noteFileSystemChanged(url.deletingLastPathComponent().path)
         } catch {
-            NSSound.beep()
+            showTrashError(node: node, path: path, detail: error.localizedDescription)
+        }
+    }
+
+    private static func showTrashError(node: MTNode, path: String, detail: String) {
+        NSSound.beep()
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = mtL("Could not move item to Trash")
+        alert.informativeText = "\(node.name)\n\n\(detail)\n\n\(mtL("The item may be protected by macOS or require additional permission."))"
+        alert.addButton(withTitle: mtL("Show in Finder"))
+        alert.addButton(withTitle: "OK")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         }
     }
 }
@@ -587,9 +634,5 @@ func mtFileTypeLabel(_ node: MTNode) -> String {
 }
 
 func mtBytes(_ value: UInt64) -> String {
-    let formatter = ByteCountFormatter()
-    formatter.countStyle = .file
-    formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
-    formatter.isAdaptive = true
-    return formatter.string(fromByteCount: Int64(clamping: value))
+    ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file)
 }
