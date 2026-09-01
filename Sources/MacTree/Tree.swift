@@ -499,6 +499,10 @@ private func mtFastExtensionKey(_ name: String) -> String {
     return "." + raw.lowercased()
 }
 
+private func mtExtensionDisplayName(_ key: String) -> String {
+    key == "(no extension)" ? mtL("No Extension") : key
+}
+
 private func mtExtensionCategory(_ key: String) -> MTCategory {
     let ext = key.hasPrefix(".") ? String(key.dropFirst()) : ""
     switch ext {
@@ -606,7 +610,7 @@ struct MTExtensionPane: View {
                 if let selectedExtension {
                     HStack(spacing: 5) {
                         Image(systemName: "scope")
-                        Text(selectedExtension).fontWeight(.semibold)
+                        Text(mtExtensionDisplayName(selectedExtension)).fontWeight(.semibold)
                         Text(mtL("selected")).foregroundStyle(Color.secondary)
                         Spacer()
                         Button(mtL("Clear")) { self.selectedExtension = nil }
@@ -676,7 +680,7 @@ private struct MTExtensionRow: View {
                 .frame(width: 8, height: 20)
                 .frame(width: columns.color)
 
-            extensionCell(stat.extensionKey, columns.ext, .leading, monospaced: true)
+            extensionCell(mtExtensionDisplayName(stat.extensionKey), columns.ext, .leading, monospaced: true)
             if columns.showType {
                 extensionCell(extensionTypeName(stat.extensionKey, category: category), columns.type, .leading)
             }
@@ -691,7 +695,7 @@ private struct MTExtensionRow: View {
         .font(.callout)
         .background(selected ? Color.accentColor.opacity(0.30) : Color.clear)
         .overlay(alignment: .bottom) { Divider().opacity(0.22) }
-        .help("\(stat.extensionKey) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) \(mtL("Allocated").lowercased()) • \(stat.fileCount.formatted()) \(mtL("files"))")
+        .help("\(mtExtensionDisplayName(stat.extensionKey)) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) \(mtL("Allocated").lowercased()) • \(stat.fileCount.formatted()) \(mtL("files"))")
     }
 
     private func extensionCell(_ text: String, _ width: CGFloat, _ alignment: Alignment, monospaced: Bool = false) -> some View {
