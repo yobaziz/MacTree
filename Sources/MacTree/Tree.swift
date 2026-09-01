@@ -116,21 +116,24 @@ final class MTVisibleTreeModel: ObservableObject {
 
 struct MTFileContextMenu: View {
     let node: MTNode
+    let resolvedPath: String
 
     var body: some View {
         Group {
-            Button(mtL("Open")) { MTFileActions.open(node) }
-            Button(mtL("Show in Finder")) { MTFileActions.reveal(node) }
-            Button(mtL("Open Containing Folder")) { MTFileActions.openContainingFolder(node) }
-            Button(mtL("Get Info")) { MTFileActions.getInfo(node) }
+            Button(mtL("Open")) { MTFileActions.open(node, path: resolvedPath) }
+            Button(mtL("Show in Finder")) { MTFileActions.reveal(node, path: resolvedPath) }
+            Button(mtL("Open Containing Folder")) { MTFileActions.openContainingFolder(node, path: resolvedPath) }
+            Button(mtL("Get Info")) { MTFileActions.getInfo(node, path: resolvedPath) }
             Divider()
-            Button(mtL("Copy Path")) { MTFileActions.copyPath(node) }
+            Button(mtL("Copy Path")) { MTFileActions.copyPath(node, path: resolvedPath) }
             Button(mtL("Copy Name")) { MTFileActions.copyName(node) }
             Button(node.isDirectory ? mtL("Open in Terminal") : mtL("Open Folder in Terminal")) {
-                MTFileActions.openTerminal(node)
+                MTFileActions.openTerminal(node, path: resolvedPath)
             }
             Divider()
-            Button(mtL("Move to Trash"), role: .destructive) { MTFileActions.moveToTrash(node) }
+            Button(mtL("Move to Trash"), role: .destructive) {
+                MTFileActions.moveToTrash(node, path: resolvedPath)
+            }
         }
     }
 }
@@ -187,8 +190,10 @@ struct MTTreePane: View {
                             ForEach(displayRows) { row in
                                 if nodes.indices.contains(row.id) {
                                     let node = nodes[row.id]
+                                    let resolvedPath = mtResolvedPath(node.id, nodes: nodes)
                                     MTTreeRow(
                                         node: node,
+                                        resolvedPath: resolvedPath,
                                         depth: row.depth,
                                         total: max(totalAllocated, 1),
                                         columns: columns,
@@ -297,6 +302,7 @@ struct MTTreePane: View {
 
 private struct MTTreeRow: View, Equatable {
     let node: MTNode
+    let resolvedPath: String
     let depth: Int
     let total: UInt64
     let columns: MTTreeColumns
@@ -315,6 +321,7 @@ private struct MTTreeRow: View, Equatable {
         lhs.node.allocatedSize == rhs.node.allocatedSize &&
         lhs.node.fileCount == rhs.node.fileCount &&
         lhs.node.modifiedTime == rhs.node.modifiedTime &&
+        lhs.resolvedPath == rhs.resolvedPath &&
         lhs.depth == rhs.depth &&
         lhs.total == rhs.total &&
         lhs.columns == rhs.columns &&
@@ -372,7 +379,7 @@ private struct MTTreeRow: View, Equatable {
             }
 
             if columns.showPath {
-                Text(node.path)
+                Text(resolvedPath)
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -387,7 +394,7 @@ private struct MTTreeRow: View, Equatable {
         .onHover(perform: hover)
         .onTapGesture(count: 2, perform: open)
         .onTapGesture(perform: select)
-        .contextMenu { MTFileContextMenu(node: node) }
+        .contextMenu { MTFileContextMenu(node: node, resolvedPath: resolvedPath) }
     }
 
     private var rowBackground: Color {
