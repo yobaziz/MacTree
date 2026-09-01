@@ -490,13 +490,14 @@ private struct MTBaseCanvas: View, Equatable {
     let nodes: [MTNode]
     let model: MTRenderModel
     let renderToken: Int
+    let colorScheme: ColorScheme
 
     static func == (lhs: MTBaseCanvas, rhs: MTBaseCanvas) -> Bool {
-        lhs.renderToken == rhs.renderToken
+        lhs.renderToken == rhs.renderToken && lhs.colorScheme == rhs.colorScheme
     }
 
     var body: some View {
-        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: true) { context, size in
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, size in
             context.fill(Path(CGRect(origin: .zero, size: size)),
                          with: .color(Color(nsColor: .windowBackgroundColor)))
 
@@ -563,6 +564,7 @@ private struct MTSurface: View {
     @Binding var selectedID: Int?
     @Binding var hoveredID: Int?
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var hoveredCellIndex: Int?
     @State private var hoveredFrameIndex: Int?
     @State private var hoverAnchor: CGPoint = .zero
@@ -572,7 +574,7 @@ private struct MTSurface: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
-                MTBaseCanvas(nodes: nodes, model: model, renderToken: renderToken)
+                MTBaseCanvas(nodes: nodes, model: model, renderToken: renderToken, colorScheme: colorScheme)
                     .equatable()
 
                 selectionOverlay
