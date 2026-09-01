@@ -75,13 +75,13 @@ struct MainView: View {
     private var toolbar: some View {
         HStack(spacing: 10) {
             Menu {
+                Button("Macintosh HD — Whole Disk") { controller.chooseDisk() }
                 Button("Home Folder") { controller.chooseHome() }
-                Button("Macintosh HD") { controller.chooseDisk() }
                 Divider()
                 Button("Choose Folder…") { controller.chooseFolder() }
             } label: {
                 Label(locationTitle, systemImage: "internaldrive")
-                    .frame(minWidth: 160, alignment: .leading)
+                    .frame(minWidth: 190, alignment: .leading)
             }
             .menuStyle(.borderlessButton)
 
@@ -113,8 +113,15 @@ struct MainView: View {
         let freePercent = controller.volumeTotal > 0
             ? Double(controller.volumeFree) / Double(controller.volumeTotal)
             : 0
+        let used = controller.volumeTotal > controller.volumeFree
+            ? controller.volumeTotal - controller.volumeFree
+            : 0
+        let mappedPercent = used > 0
+            ? min(1, Double(controller.allocated) / Double(used))
+            : 0
+        let wholeDisk = controller.rootURL.path == "/"
 
-        return HStack(spacing: 17) {
+        return HStack(spacing: 15) {
             metric("Disk", mtBytes(controller.volumeTotal))
 
             HStack(spacing: 5) {
@@ -131,10 +138,33 @@ struct MainView: View {
             }
             .layoutPriority(2)
 
-            metric("Scanned", mtBytes(controller.allocated))
-            metric("Logical", mtBytes(controller.logical))
+            metric("Mapped", mtBytes(controller.allocated))
+            if wholeDisk && used > 0 {
+                HStack(spacing: 4) {
+                    Text("Coverage:").foregroundStyle(Color.secondary)
+                    Text(mappedPercent, format: .percent.precision(.fractionLength(0)))
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                }
+            }
             metric("Files", controller.files.formatted())
             metric("Items", controller.items.formatted())
+
+            Text(wholeDisk ? "Whole Disk" : "Folder scope")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(wholeDisk ? Color.blue : Color.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background((wholeDisk ? Color.blue : Color.secondary).opacity(0.10), in: Capsule())
+
+            if wholeDisk && !controller.fullDiskAccess {
+                Text("Limited permissions")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.orange)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.11), in: Capsule())
+            }
 
             Text("iCloud skipped")
                 .font(.caption.weight(.semibold))
@@ -181,7 +211,7 @@ struct MainView: View {
     }
 
     private var locationTitle: String {
-        if controller.rootURL.path == "/" { return "Macintosh HD" }
+        if controller.rootURL.path == "/" { return "Macintosh HD — Whole Disk" }
         let name = controller.rootURL.lastPathComponent
         return name.isEmpty ? controller.rootURL.path : name
     }
