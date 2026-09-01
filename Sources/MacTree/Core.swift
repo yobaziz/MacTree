@@ -433,22 +433,22 @@ enum MTCategory: String, CaseIterable {
 
     var color: Color {
         switch self {
-        case .application: return .green
-        case .video: return .purple
-        case .image: return .pink
-        case .archive: return .orange
-        case .audio: return .cyan
-        case .document: return .blue
-        case .code: return .teal
-        case .database: return .indigo
-        case .cache: return .yellow
-        case .appData: return .mint
-        case .gameData: return .red
-        case .config: return .brown
-        case .logs: return Color(nsColor: .systemGray)
-        case .temp: return Color(nsColor: .systemOrange)
-        case .system: return Color(nsColor: .systemGreen)
-        case .other: return Color(nsColor: .darkGray)
+        case .application: return Color(hue: 0.34, saturation: 0.70, brightness: 0.78)
+        case .video: return Color(hue: 0.78, saturation: 0.66, brightness: 0.82)
+        case .image: return Color(hue: 0.93, saturation: 0.68, brightness: 0.86)
+        case .archive: return Color(hue: 0.08, saturation: 0.76, brightness: 0.88)
+        case .audio: return Color(hue: 0.53, saturation: 0.66, brightness: 0.82)
+        case .document: return Color(hue: 0.60, saturation: 0.68, brightness: 0.84)
+        case .code: return Color(hue: 0.50, saturation: 0.62, brightness: 0.75)
+        case .database: return Color(hue: 0.68, saturation: 0.56, brightness: 0.78)
+        case .cache: return Color(hue: 0.14, saturation: 0.80, brightness: 0.88)
+        case .appData: return Color(hue: 0.46, saturation: 0.58, brightness: 0.77)
+        case .gameData: return Color(hue: 0.01, saturation: 0.70, brightness: 0.82)
+        case .config: return Color(hue: 0.09, saturation: 0.44, brightness: 0.68)
+        case .logs: return Color(hue: 0.60, saturation: 0.06, brightness: 0.56)
+        case .temp: return Color(hue: 0.10, saturation: 0.68, brightness: 0.82)
+        case .system: return Color(hue: 0.41, saturation: 0.58, brightness: 0.70)
+        case .other: return Color(hue: 0.62, saturation: 0.10, brightness: 0.48)
         }
     }
 }
@@ -457,23 +457,22 @@ func mtDirectCategory(_ node: MTNode) -> MTCategory {
     let name = node.name.lowercased()
     let path = node.path.lowercased()
 
-    if path.contains("/library/caches/") || name == "cache" || name == "caches" || name == "cacheddata" ||
-        name == "code cache" || name == "gpucache" || name.hasSuffix(".cache") { return .cache }
-    if path.contains("/library/logs/") || name == "log" || name == "logs" || name.hasSuffix(".log") { return .logs }
-    if path.contains("/library/preferences/") || name == "preferences" || name == "config" || name == "configs" ||
-        name == ".config" || name == "settings" { return .config }
-    if name == "tmp" || name == "temp" || name == "temporary" || path.contains("/tmp/") { return .temp }
-    if path.contains("/steamapps/common/") || path.contains("/games/") || name == "gamedata" || name == "game data" { return .gameData }
-    if path.contains(".app/contents/") || name.hasSuffix(".app") { return .application }
-    if path.contains("/library/application support/") || path.contains("/library/containers/") ||
-        path.contains("/library/group containers/") || name == "application support" || name == "containers" ||
-        name == "group containers" || name == "saved application state" { return .appData }
-    if path.contains("/developer/") || path.contains("/deriveddata/") || path.contains("/sourcepackages/") ||
-        name == "developer" || name == "deriveddata" || name == "sourcepackages" || name == "node_modules" ||
-        name == ".gradle" || name == ".swiftpm" || name == ".npm" || name == ".cargo" { return .code }
-    if path.contains("/system/") || path.contains("/library/frameworks/") || name.hasSuffix(".framework") || name == "coreservices" { return .system }
-
     if node.isDirectory {
+        if path.contains("/library/caches/") || name == "cache" || name == "caches" || name == "cacheddata" ||
+            name == "code cache" || name == "gpucache" || name.hasSuffix(".cache") { return .cache }
+        if path.contains("/library/logs/") || name == "log" || name == "logs" || name.hasSuffix(".log") { return .logs }
+        if path.contains("/library/preferences/") || name == "preferences" || name == "config" || name == "configs" ||
+            name == ".config" || name == "settings" { return .config }
+        if name == "tmp" || name == "temp" || name == "temporary" || path.contains("/tmp/") { return .temp }
+        if path.contains("/steamapps/common/") || path.contains("/games/") || name == "gamedata" || name == "game data" { return .gameData }
+        if name.hasSuffix(".app") || name.hasSuffix(".appex") || name.hasSuffix(".xpc") { return .application }
+        if path.contains("/library/application support/") || path.contains("/library/containers/") ||
+            path.contains("/library/group containers/") || name == "application support" || name == "containers" ||
+            name == "group containers" || name == "saved application state" { return .appData }
+        if path.contains("/developer/") || path.contains("/deriveddata/") || path.contains("/sourcepackages/") ||
+            name == "developer" || name == "deriveddata" || name == "sourcepackages" || name == "node_modules" ||
+            name == ".gradle" || name == ".swiftpm" || name == ".npm" || name == ".cargo" { return .code }
+        if path.contains("/system/") || path.contains("/library/frameworks/") || name.hasSuffix(".framework") || name == "coreservices" { return .system }
         if ["movies", "videos", "video"].contains(name) { return .video }
         if ["pictures", "images", "image", "photos"].contains(name) { return .image }
         if ["music", "audio", "sounds", "sound"].contains(name) { return .audio }
@@ -484,20 +483,33 @@ func mtDirectCategory(_ node: MTNode) -> MTCategory {
 
     let ext = (node.name as NSString).pathExtension.lowercased()
     switch ext {
-    case "app", "exe": return .application
-    case "mp4", "mov", "mkv", "avi", "webm", "m4v", "mpeg", "mpg": return .video
-    case "jpg", "jpeg", "png", "heic", "gif", "webp", "tiff", "bmp", "svg": return .image
-    case "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "dmg", "pkg", "iso", "jar": return .archive
-    case "mp3", "aac", "m4a", "wav", "flac", "ogg", "aiff", "bank": return .audio
+    case "app", "appex", "xpc", "exe": return .application
+    case "mp4", "mov", "mkv", "avi", "webm", "m4v", "mpeg", "mpg", "bik", "bink": return .video
+    case "jpg", "jpeg", "png", "heic", "gif", "webp", "tiff", "bmp", "svg", "icns": return .image
+    case "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "dmg", "pkg", "iso", "jar", "asar": return .archive
+    case "mp3", "aac", "m4a", "wav", "flac", "ogg", "aiff", "bank", "caf": return .audio
     case "pdf", "doc", "docx", "pages", "txt", "rtf", "md", "csv", "xls", "xlsx", "ppt", "pptx": return .document
-    case "swift", "c", "cpp", "cc", "h", "hpp", "js", "ts", "py", "java", "kt", "rs", "go", "rb", "php", "css", "html": return .code
-    case "db", "sqlite", "sqlite3", "realm", "mdb": return .database
-    case "ini", "cfg", "conf", "plist", "yaml", "yml", "toml": return .config
+    case "swift", "c", "cpp", "cc", "h", "hpp", "js", "ts", "py", "java", "kt", "rs", "go", "rb", "php", "css", "html", "sh", "frag", "vert", "glsl", "metal", "air", "wasm", "map": return .code
+    case "db", "sqlite", "sqlite3", "realm", "mdb", "db-wal", "db-shm": return .database
+    case "ini", "cfg", "conf", "plist", "yaml", "yml", "toml", "json", "xml", "strings", "stringsdict": return .config
     case "log": return .logs
-    case "pak", "vpk", "wad", "pck", "bundle", "assets", "asset", "res", "resource", "dat", "bin", "obb", "unity3d": return .gameData
-    case "dylib", "so", "framework", "kext": return .system
-    default: return .other
+    case "pak", "vpk", "wad", "pck", "bundle", "assets", "asset", "res", "ress", "resource", "dat", "bin", "obb", "unity3d", "forge": return .gameData
+    case "dylib", "so", "framework", "kext", "metallib", "car", "mom", "momd", "nib", "storyboardc": return .system
+    default: break
     }
+
+    if path.contains("/library/caches/") || path.contains("/cache/") { return .cache }
+    if path.contains("/library/logs/") { return .logs }
+    if path.contains("/library/preferences/") { return .config }
+    if path.contains("/tmp/") || path.contains("/temp/") { return .temp }
+    if path.contains("/steamapps/common/") || path.contains("/games/") { return .gameData }
+    if path.contains("/developer/") || path.contains("/deriveddata/") || path.contains("/sourcepackages/") ||
+        path.contains("/node_modules/") { return .code }
+    if path.contains("/system/") || path.contains("/library/frameworks/") { return .system }
+    if path.contains(".app/contents/") || path.contains(".appex/contents/") || path.contains(".xpc/contents/") { return .application }
+    if path.contains("/library/application support/") || path.contains("/library/containers/") ||
+        path.contains("/library/group containers/") { return .appData }
+    return .other
 }
 
 func mtBestCategory(_ nodeID: Int, _ nodes: [MTNode]) -> MTCategory {
