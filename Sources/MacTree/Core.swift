@@ -57,10 +57,10 @@ actor MTScanner {
             Builder(id: 0, parentID: nil, name: rootName, path: rootPath, isDirectory: true,
                     logicalSize: 0, allocatedSize: 0, fileCount: 0, modifiedTime: 0, children: [])
         ]
-        builders.reserveCapacity(400_000)
+        builders.reserveCapacity(rootPath == "/" ? 750_000 : 400_000)
 
         var directoryIDs: [String: Int] = ["": 0]
-        directoryIDs.reserveCapacity(60_000)
+        directoryIDs.reserveCapacity(rootPath == "/" ? 120_000 : 60_000)
 
         var items: UInt64 = 0
         var files: UInt64 = 0
@@ -134,7 +134,7 @@ actor MTScanner {
             builders[parentID].children.append(id)
             if isDirectory { directoryIDs[relative] = id }
 
-            if publishCounter >= 50_000 {
+            if publishCounter >= 100_000 {
                 await progress(MTProgress(items: items, files: files, logical: logical, allocated: allocated,
                                           currentPath: currentPath, elapsed: CFAbsoluteTimeGetCurrent() - started))
                 publishCounter = 0
@@ -216,21 +216,21 @@ final class MTSearchModel: ObservableObject {
         let snapshot = nodes
         isSearching = true
         task = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled else { return }
             let lowered = needle.lowercased()
-            let ids = await Task.detached(priority: .userInitiated) {
+            let ids = await Task.detached(priority: .utility) {
                 var hits: [(Int, UInt64)] = []
-                hits.reserveCapacity(1000)
+                hits.reserveCapacity(750)
                 for node in snapshot.dropFirst() {
                     if Task.isCancelled { return [Int]() }
                     if node.name.lowercased().contains(lowered) || node.path.lowercased().contains(lowered) {
                         hits.append((node.id, node.allocatedSize))
-                        if hits.count >= 5000 { break }
+                        if hits.count >= 2500 { break }
                     }
                 }
                 hits.sort { $0.1 > $1.1 }
-                return Array(hits.prefix(2000).map { $0.0 })
+                return Array(hits.prefix(1000).map { $0.0 })
             }.value
             guard !Task.isCancelled, let self else { return }
             self.resultIDs = ids
@@ -241,7 +241,7 @@ final class MTSearchModel: ObservableObject {
 
 @MainActor
 final class MTController: ObservableObject {
-    @Published var rootURL = FileManager.default.homeDirectoryForCurrentUser
+    @Published var rootURL = URL(fileURLWithPath: "/", isDirectory: true)
     @Published var nodes: [MTNode] = []
     @Published var rootID = 0
     @Published var items: UInt64 = 0
