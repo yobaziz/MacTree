@@ -8,6 +8,13 @@ let package = Package(
         .executable(name: "MacTree", targets: ["MacTree"])
     ],
     targets: [
-        .executableTarget(name: "MacTree", path: "Sources/MacTree")
-    ]
+        .executableTarget(
+            name: "MacTree",
+            path: "Sources/MacTree",
+            swiftSettings: [
+                .unsafeFlags(["-Xfrontend", "-strict-concurrency=minimal"])
+            ]
+        )
+    ],
+    swiftLanguageVersions: [.v5]
 )
