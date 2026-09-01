@@ -241,7 +241,7 @@ private struct MTTreemapBuilder {
         for index in rects.indices {
             let token = rects[index].0
             if token == remainderToken {
-                let countText = remainderFiles > 0 ? "\(remainderFiles.formatted()) items" : "Grouped items"
+                let countText = remainderFiles > 0 ? "\(remainderFiles.formatted()) \(mtL("items"))" : mtL("Grouped items")
                 let category = mtCategoryForGroup(remainderSlice, nodes, fallback: nodeCategory)
                 appendCell(node, rects[index].1, depth + 1, .aggregate, countText,
                            remainderWeight, remainderFiles, category, &cells)
@@ -297,6 +297,7 @@ private struct MTBuildKey: Hashable {
     let rootAllocated: UInt64
     let widthBucket: Int
     let heightBucket: Int
+    let language: String
 }
 
 struct MTTreemap: View {
@@ -317,7 +318,7 @@ struct MTTreemap: View {
                     Text(mtBytes(nodes[rootID].allocatedSize)).font(.caption).foregroundStyle(Color.secondary).monospacedDigit()
                 }
                 Spacer()
-                Text("Hierarchy view • folder headers select whole folders • right-click for actions")
+                Text(mtL("Hierarchy view • folder headers select whole folders • right-click for actions"))
                     .font(.caption2).foregroundStyle(Color.secondary)
             }
             .padding(.horizontal, 9).padding(.vertical, 4)
@@ -352,7 +353,7 @@ struct MTTreemap: View {
                     .monospacedDigit()
                 Text("•")
                     .foregroundStyle(Color.secondary)
-                Text("\(node.fileCount.formatted()) files")
+                Text("\(node.fileCount.formatted()) \(mtL("files"))")
                     .font(.caption2)
                     .foregroundStyle(Color.secondary)
             } else {
@@ -377,7 +378,7 @@ struct MTTreemap: View {
                 ForEach(MTCategory.allCases, id: \.self) { category in
                     HStack(spacing: 3) {
                         RoundedRectangle(cornerRadius: 2).fill(category.color).frame(width: 8, height: 8)
-                        Text(category.rawValue).font(.system(size: 9)).foregroundStyle(Color.secondary)
+                        Text(mtL(category.rawValue)).font(.system(size: 9)).foregroundStyle(Color.secondary)
                     }
                 }
             }
@@ -386,7 +387,7 @@ struct MTTreemap: View {
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.52))
     }
 
-    private var rootPath: String { nodes.indices.contains(rootID) ? nodes[rootID].path : "Treemap" }
+    private var rootPath: String { nodes.indices.contains(rootID) ? nodes[rootID].path : mtL("Treemap") }
 }
 
 private struct MTTreemapViewport: View {
@@ -395,6 +396,7 @@ private struct MTTreemapViewport: View {
     @Binding var selectedID: Int?
     @Binding var hoveredID: Int?
 
+    @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
     @State private var model = MTRenderModel.empty()
     @State private var renderToken = 0
     @State private var builtKey: MTBuildKey?
@@ -407,7 +409,8 @@ private struct MTTreemapViewport: View {
                                  rootID: rootID,
                                  rootAllocated: rootAllocated,
                                  widthBucket: Int(size.width / 6),
-                                 heightBucket: Int(size.height / 6))
+                                 heightBucket: Int(size.height / 6),
+                                 language: language)
 
             MTSurface(nodes: nodes, model: model, renderToken: renderToken,
                       selectedID: $selectedID, hoveredID: $hoveredID)
@@ -445,11 +448,11 @@ private struct MTDiskCapacityBar: View {
 
             HStack(spacing: 0) {
                 segment(width: scannedW, color: Color.accentColor.opacity(0.78),
-                        title: "Scanned", value: mtBytes(safeScanned))
+                        title: mtL("Scanned"), value: mtBytes(safeScanned))
                 segment(width: otherW, color: Color.secondary.opacity(0.42),
-                        title: "Unscanned / Other Used", value: mtBytes(otherUsed))
+                        title: mtL("Unscanned / Other Used"), value: mtBytes(otherUsed))
                 segment(width: freeW, color: Color.green.opacity(0.48),
-                        title: "Free Space", value: mtBytes(free))
+                        title: mtL("Free Space"), value: mtBytes(free))
             }
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.12), lineWidth: 1))
@@ -458,7 +461,7 @@ private struct MTDiskCapacityBar: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.62))
-        .help("Disk capacity: mapped selection, used-but-unmapped space, and free space")
+        .help(mtL("Disk capacity: mapped selection, used-but-unmapped space, and free space"))
     }
 
     @ViewBuilder
@@ -518,7 +521,7 @@ private struct MTBaseCanvas: View, Equatable {
                     if cell.rect.width > 105 && cell.rect.height > 43 {
                         let sizeText = mtBytes(cell.representedAllocated)
                         let details = cell.representedFiles > 1
-                            ? "\(sizeText) • \(cell.representedFiles.formatted()) files"
+                            ? "\(sizeText) • \(cell.representedFiles.formatted()) \(mtL("files"))"
                             : sizeText
                         let sub = Text(details)
                             .font(.system(size: 7.5))
@@ -673,7 +676,7 @@ private struct MTSurface: View {
                         category: mtBestCategory(frame.nodeID, nodes),
                         allocated: node.allocatedSize,
                         files: node.fileCount,
-                        typeLabel: "Folder",
+                        typeLabel: mtL("Folder"),
                         size: size)
     }
 
@@ -684,7 +687,7 @@ private struct MTSurface: View {
                         category: cell.category,
                         allocated: cell.representedAllocated,
                         files: cell.representedFiles,
-                        typeLabel: node.isDirectory ? (cell.label.contains("items") ? "Grouped" : "Folder") : mtFileTypeLabel(node),
+                        typeLabel: node.isDirectory ? (cell.kind == .aggregate ? mtL("Grouped") : mtL("Folder")) : mtFileTypeLabel(node),
                         size: size)
     }
 
@@ -705,13 +708,13 @@ private struct MTSurface: View {
                 Text(title).font(.callout.weight(.bold)).lineLimit(1)
                 Spacer()
                 RoundedRectangle(cornerRadius: 2).fill(category.color).frame(width: 10, height: 10)
-                Text(category.rawValue).font(.caption.weight(.semibold))
+                Text(mtL(category.rawValue)).font(.caption.weight(.semibold))
             }
             HStack(spacing: 16) {
-                info("Allocated", mtBytes(allocated))
-                info("Logical", mtBytes(node.logicalSize))
-                info("Files", files.formatted())
-                info("Type", typeLabel)
+                info(mtL("Allocated"), mtBytes(allocated))
+                info(mtL("Logical"), mtBytes(node.logicalSize))
+                info(mtL("Files"), files.formatted())
+                info(mtL("Type"), typeLabel)
             }
             .font(.caption2)
             Text(node.path)
