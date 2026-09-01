@@ -197,6 +197,7 @@ struct MainView: View {
 private struct MTSearchField: View {
     @ObservedObject var model: MTSearchModel
     @State private var text = ""
+    @State private var debounceTask: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -204,13 +205,19 @@ private struct MTSearchField: View {
             TextField("Search files and folders", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 300)
-                .onChange(of: text) { _, value in model.search(value) }
+                .onChange(of: text) { _, value in
+                    debounceTask?.cancel()
+                    if value.isEmpty {
+                        model.search("")
+                    } else {
+                        debounceTask = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 100_000_000)
+                            guard !Task.isCancelled else { return }
+                            model.search(value)
+                        }
+                    }
+                }
         }
-    }
-}
-
-extension UInt64 {
-    func addingReportingOverflow(by other: UInt64) -> (partialValue: UInt64, overflow: Bool) {
-        addingReportingOverflow(other)
+        .onDisappear { debounceTask?.cancel() }
     }
 }
