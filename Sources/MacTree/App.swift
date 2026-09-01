@@ -1,19 +1,226 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Preferences / localization
+
+enum MTLanguageChoice: String, CaseIterable, Identifiable {
+    case english = "en"
+    case turkish = "tr"
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .english: return "English"
+        case .turkish: return "Türkçe"
+        }
+    }
+}
+
+enum MTAppearanceChoice: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+    var scheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
+private let mtTurkishStrings: [String: String] = [
+    "Settings": "Ayarlar",
+    "General": "Genel",
+    "Language": "Dil",
+    "Appearance": "Görünüm",
+    "English": "İngilizce",
+    "Turkish": "Türkçe",
+    "System": "Sistem",
+    "Light": "Açık",
+    "Dark": "Koyu",
+    "Follow macOS": "macOS ayarını kullan",
+    "Changes are saved automatically.": "Değişiklikler otomatik kaydedilir.",
+
+    "Macintosh HD — Whole Disk": "Macintosh HD — Tüm Disk",
+    "Home Folder": "Ana Klasör",
+    "Choose Folder…": "Klasör Seç…",
+    "Stop": "Durdur",
+    "Scan": "Tara",
+    "Full Disk Access": "Tam Disk Erişimi",
+    "Grant Full Disk Access": "Tam Disk Erişimi Ver",
+    "Scanning": "Taranıyor",
+    "Ready": "Hazır",
+    "Disk": "Disk",
+    "Free": "Boş",
+    "Mapped": "Eşlenen",
+    "Coverage": "Kapsama",
+    "Files": "Dosyalar",
+    "Items": "Öğeler",
+    "Whole Disk": "Tüm Disk",
+    "Folder scope": "Klasör kapsamı",
+    "Limited permissions": "Sınırlı izin",
+    "iCloud skipped": "iCloud atlandı",
+    "Scanning items": "Öğe taranıyor",
+    "Scanned files in": "Taranan dosya / süre",
+    "Hover": "Üzerinde",
+    "Selected": "Seçili",
+    "Search files and folders": "Dosya ve klasör ara",
+
+    "Open": "Aç",
+    "Show in Finder": "Finder'da Göster",
+    "Open Containing Folder": "Bulunduğu Klasörü Aç",
+    "Get Info": "Bilgi Ver",
+    "Copy Path": "Yolu Kopyala",
+    "Copy Name": "Adı Kopyala",
+    "Open in Terminal": "Terminal'de Aç",
+    "Open Folder in Terminal": "Klasörü Terminal'de Aç",
+    "Move to Trash": "Çöp Sepetine Taşı",
+
+    "Name": "Ad",
+    "Size": "Boyut",
+    "Allocated": "Ayrılan",
+    "% Disk": "% Disk",
+    "Modified": "Değiştirilme",
+    "Path": "Yol",
+    "File Types / Extensions": "Dosya Türleri / Uzantılar",
+    "Indexing…": "İndeksleniyor…",
+    "extensions": "uzantı",
+    "Extension": "Uzantı",
+    "File Type": "Dosya Türü",
+    "Percent": "Yüzde",
+    "selected": "seçili",
+    "Clear": "Temizle",
+    "No Extension": "Uzantısız",
+    "File": "Dosya",
+    "Dynamic Library": "Dinamik Kütüphane",
+    "Framework": "Framework",
+    "Metal Library": "Metal Kütüphanesi",
+    "Asset Catalog": "Varlık Kataloğu",
+    "Property List": "Özellik Listesi",
+    "Localization": "Yerelleştirme",
+    "JSON Data": "JSON Verisi",
+    "XML Data": "XML Verisi",
+    "Configuration": "Yapılandırma",
+    "Database": "Veritabanı",
+    "Log File": "Günlük Dosyası",
+    "Swift Source": "Swift Kaynağı",
+    "C/C++ Source": "C/C++ Kaynağı",
+    "JavaScript / TS": "JavaScript / TS",
+    "Python Source": "Python Kaynağı",
+    "Game Archive": "Oyun Arşivi",
+    "Resource Data": "Kaynak Verisi",
+    "Bundle Data": "Bundle Verisi",
+    "Video": "Video",
+    "Image": "Görsel",
+    "Audio": "Ses",
+    "Archive": "Arşiv",
+    "Disk Image": "Disk İmajı",
+    "Installer Package": "Kurulum Paketi",
+    "PDF Document": "PDF Belgesi",
+    "Text Document": "Metin Belgesi",
+    "Application": "Uygulama",
+
+    "Apps": "Uygulamalar",
+    "Images": "Görseller",
+    "Archives": "Arşivler",
+    "Docs": "Belgeler",
+    "Code / Dev": "Kod / Geliştirme",
+    "Cache": "Önbellek",
+    "App Data": "Uygulama Verisi",
+    "Game Data": "Oyun Verisi",
+    "Config": "Ayarlar",
+    "Logs": "Günlükler",
+    "Temp": "Geçici",
+    "Other": "Diğer",
+
+    "Hierarchy view • folder headers select whole folders • right-click for actions": "Hiyerarşi görünümü • klasör başlıkları tüm klasörü seçer • işlemler için sağ tık",
+    "Scanned": "Taranan",
+    "Unscanned / Other Used": "Taranmayan / Diğer Kullanılan",
+    "Free Space": "Boş Alan",
+    "Disk capacity: mapped selection, used-but-unmapped space, and free space": "Disk kapasitesi: eşlenen alan, eşlenmeyen kullanılan alan ve boş alan",
+    "Folder": "Klasör",
+    "Grouped": "Gruplu",
+    "Grouped items": "Gruplanmış öğeler",
+    "Logical": "Mantıksal",
+    "Type": "Tür",
+    "files": "dosya",
+    "items": "öğe",
+    "Treemap": "Disk Haritası"
+]
+
+func mtL(_ key: String) -> String {
+    let language = UserDefaults.standard.string(forKey: "mactree.language") ?? MTLanguageChoice.english.rawValue
+    if language == MTLanguageChoice.turkish.rawValue {
+        return mtTurkishStrings[key] ?? key
+    }
+    return key
+}
+
 @main
 struct MacTreeApp: App {
+    @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
+    @AppStorage("mactree.appearance") private var appearance = MTAppearanceChoice.system.rawValue
+
+    private var preferredScheme: ColorScheme? {
+        MTAppearanceChoice(rawValue: appearance)?.scheme
+    }
+
     var body: some Scene {
         WindowGroup {
             MainView()
                 .frame(minWidth: 1220, minHeight: 720)
+                .preferredColorScheme(preferredScheme)
+                .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
         }
         .defaultSize(width: 1460, height: 880)
+
+        Settings {
+            MTSettingsView()
+                .preferredColorScheme(preferredScheme)
+                .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
+        }
+    }
+}
+
+struct MTSettingsView: View {
+    @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
+    @AppStorage("mactree.appearance") private var appearance = MTAppearanceChoice.system.rawValue
+
+    var body: some View {
+        Form {
+            Section(mtL("General")) {
+                Picker(mtL("Language"), selection: $language) {
+                    Text("English").tag(MTLanguageChoice.english.rawValue)
+                    Text("Türkçe").tag(MTLanguageChoice.turkish.rawValue)
+                }
+
+                Picker(mtL("Appearance"), selection: $appearance) {
+                    Label(mtL("System"), systemImage: "circle.lefthalf.filled")
+                        .tag(MTAppearanceChoice.system.rawValue)
+                    Label(mtL("Light"), systemImage: "sun.max.fill")
+                        .tag(MTAppearanceChoice.light.rawValue)
+                    Label(mtL("Dark"), systemImage: "moon.fill")
+                        .tag(MTAppearanceChoice.dark.rawValue)
+                }
+            }
+
+            Text(mtL("Changes are saved automatically."))
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
+        }
+        .formStyle(.grouped)
+        .frame(width: 430, height: 220)
+        .padding(8)
     }
 }
 
 struct MainView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
+    @AppStorage("mactree.appearance") private var appearance = MTAppearanceChoice.system.rawValue
     @StateObject private var controller = MTController()
     @State private var selectedID: Int?
     @State private var hoveredID: Int?
@@ -64,6 +271,9 @@ struct MainView: View {
             Divider()
             status
         }
+        // Reading these values here makes every visible pane refresh its labels
+        // without recreating the scanner/controller or losing the current scan.
+        .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
         .onChange(of: controller.scanVersion) { _, _ in
             selectedID = nil
             hoveredID = nil
@@ -87,10 +297,10 @@ struct MainView: View {
     private var toolbar: some View {
         HStack(spacing: 10) {
             Menu {
-                Button("Macintosh HD — Whole Disk") { controller.chooseDisk() }
-                Button("Home Folder") { controller.chooseHome() }
+                Button(mtL("Macintosh HD — Whole Disk")) { controller.chooseDisk() }
+                Button(mtL("Home Folder")) { controller.chooseHome() }
                 Divider()
-                Button("Choose Folder…") { controller.chooseFolder() }
+                Button(mtL("Choose Folder…")) { controller.chooseFolder() }
             } label: {
                 Label(locationTitle, systemImage: "internaldrive")
                     .frame(minWidth: 190, alignment: .leading)
@@ -98,27 +308,58 @@ struct MainView: View {
             .menuStyle(.borderlessButton)
 
             if controller.isScanning {
-                Button("Stop", role: .destructive) { controller.stop() }
+                Button(mtL("Stop"), role: .destructive) { controller.stop() }
             } else {
-                Button("Scan") { controller.start() }
+                Button(mtL("Scan")) { controller.start() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: [])
             }
 
             Button { controller.openFullDiskAccess() } label: {
-                Label(controller.fullDiskAccess ? "Full Disk Access" : "Grant Full Disk Access",
+                Label(controller.fullDiskAccess ? mtL("Full Disk Access") : mtL("Grant Full Disk Access"),
                       systemImage: controller.fullDiskAccess ? "lock.open.fill" : "lock.shield")
             }
             .foregroundStyle(controller.fullDiskAccess ? Color.green : Color.secondary)
 
             Spacer()
+
+            preferencesMenu
             MTSearchField(model: controller.search)
-            Label(controller.isScanning ? "Scanning" : "Ready",
+            Label(controller.isScanning ? mtL("Scanning") : mtL("Ready"),
                   systemImage: controller.isScanning ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
                 .foregroundStyle(controller.isScanning ? Color.secondary : Color.green)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
+    }
+
+    private var preferencesMenu: some View {
+        Menu {
+            Picker(mtL("Language"), selection: $language) {
+                Text("English").tag(MTLanguageChoice.english.rawValue)
+                Text("Türkçe").tag(MTLanguageChoice.turkish.rawValue)
+            }
+
+            Divider()
+
+            Picker(mtL("Appearance"), selection: $appearance) {
+                Label(mtL("System"), systemImage: "circle.lefthalf.filled")
+                    .tag(MTAppearanceChoice.system.rawValue)
+                Label(mtL("Light"), systemImage: "sun.max.fill")
+                    .tag(MTAppearanceChoice.light.rawValue)
+                Label(mtL("Dark"), systemImage: "moon.fill")
+                    .tag(MTAppearanceChoice.dark.rawValue)
+            }
+
+            Divider()
+            Button(mtL("Settings") + "…") {
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }
+        } label: {
+            Image(systemName: "gearshape.fill")
+        }
+        .menuStyle(.borderlessButton)
+        .help(mtL("Settings"))
     }
 
     private var summary: some View {
@@ -134,10 +375,10 @@ struct MainView: View {
         let wholeDisk = controller.rootURL.path == "/"
 
         return HStack(spacing: 15) {
-            metric("Disk", mtBytes(controller.volumeTotal))
+            metric(mtL("Disk"), mtBytes(controller.volumeTotal))
 
             HStack(spacing: 5) {
-                Text("Free:").foregroundStyle(Color.secondary)
+                Text(mtL("Free") + ":").foregroundStyle(Color.secondary)
                 Text(mtBytes(controller.volumeFree))
                     .fontWeight(.bold)
                     .foregroundStyle(Color.green)
@@ -150,19 +391,19 @@ struct MainView: View {
             }
             .layoutPriority(2)
 
-            metric("Mapped", mtBytes(controller.allocated))
+            metric(mtL("Mapped"), mtBytes(controller.allocated))
             if wholeDisk && used > 0 {
                 HStack(spacing: 4) {
-                    Text("Coverage:").foregroundStyle(Color.secondary)
+                    Text(mtL("Coverage") + ":").foregroundStyle(Color.secondary)
                     Text(mappedPercent, format: .percent.precision(.fractionLength(0)))
                         .fontWeight(.semibold)
                         .monospacedDigit()
                 }
             }
-            metric("Files", controller.files.formatted())
-            metric("Items", controller.items.formatted())
+            metric(mtL("Files"), controller.files.formatted())
+            metric(mtL("Items"), controller.items.formatted())
 
-            Text(wholeDisk ? "Whole Disk" : "Folder scope")
+            Text(wholeDisk ? mtL("Whole Disk") : mtL("Folder scope"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(wholeDisk ? Color.blue : Color.secondary)
                 .padding(.horizontal, 7)
@@ -170,7 +411,7 @@ struct MainView: View {
                 .background((wholeDisk ? Color.blue : Color.secondary).opacity(0.10), in: Capsule())
 
             if wholeDisk && !controller.fullDiskAccess {
-                Text("Limited permissions")
+                Text(mtL("Limited permissions"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.orange)
                     .padding(.horizontal, 7)
@@ -178,7 +419,7 @@ struct MainView: View {
                     .background(Color.orange.opacity(0.11), in: Capsule())
             }
 
-            Text("iCloud skipped")
+            Text(mtL("iCloud skipped"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.secondary)
                 .padding(.horizontal, 7)
@@ -201,10 +442,11 @@ struct MainView: View {
         HStack(spacing: 10) {
             if controller.isScanning {
                 ProgressView().controlSize(.small)
-                Text("Scanning \(controller.items.formatted()) items").fontWeight(.semibold)
+                Text("\(mtL("Scanning")) \(controller.items.formatted()) \(mtL("items"))")
+                    .fontWeight(.semibold)
                 Text(controller.currentPath).foregroundStyle(Color.secondary).lineLimit(1)
             } else {
-                Text("Scanned \(controller.files.formatted()) files in \(controller.elapsed.formatted(.number.precision(.fractionLength(1)))) s")
+                Text("\(mtL("Scanned")) \(controller.files.formatted()) \(mtL("files")) • \(controller.elapsed.formatted(.number.precision(.fractionLength(1)))) s")
             }
 
             Spacer()
@@ -212,7 +454,7 @@ struct MainView: View {
             let activeID = hoveredID ?? selectedID
             if let activeID, controller.nodes.indices.contains(activeID) {
                 let node = controller.nodes[activeID]
-                Text((hoveredID != nil ? "Hover: " : "Selected: ") + node.path + "   " + mtBytes(node.allocatedSize))
+                Text((hoveredID != nil ? mtL("Hover") : mtL("Selected")) + ": " + node.path + "   " + mtBytes(node.allocatedSize))
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)
             }
@@ -223,7 +465,7 @@ struct MainView: View {
     }
 
     private var locationTitle: String {
-        if controller.rootURL.path == "/" { return "Macintosh HD — Whole Disk" }
+        if controller.rootURL.path == "/" { return mtL("Macintosh HD — Whole Disk") }
         let name = controller.rootURL.lastPathComponent
         return name.isEmpty ? controller.rootURL.path : name
     }
@@ -244,7 +486,7 @@ private struct MTSearchField: View {
     var body: some View {
         HStack(spacing: 6) {
             if model.isSearching { ProgressView().controlSize(.mini) }
-            TextField("Search files and folders", text: $text)
+            TextField(mtL("Search files and folders"), text: $text)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 300)
                 .onChange(of: text) { _, value in
