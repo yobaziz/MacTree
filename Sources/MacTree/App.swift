@@ -367,8 +367,8 @@ struct MainView: View {
             }
 
             Divider()
-            Button(mtL("Settings") + "…") {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            SettingsLink {
+                Text(mtL("Settings") + "…")
             }
         } label: {
             Image(systemName: "gearshape.fill")
