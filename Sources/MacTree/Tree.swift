@@ -119,18 +119,18 @@ struct MTFileContextMenu: View {
 
     var body: some View {
         Group {
-            Button("Open") { MTFileActions.open(node) }
-            Button("Show in Finder") { MTFileActions.reveal(node) }
-            Button("Open Containing Folder") { MTFileActions.openContainingFolder(node) }
-            Button("Get Info") { MTFileActions.getInfo(node) }
+            Button(mtL("Open")) { MTFileActions.open(node) }
+            Button(mtL("Show in Finder")) { MTFileActions.reveal(node) }
+            Button(mtL("Open Containing Folder")) { MTFileActions.openContainingFolder(node) }
+            Button(mtL("Get Info")) { MTFileActions.getInfo(node) }
             Divider()
-            Button("Copy Path") { MTFileActions.copyPath(node) }
-            Button("Copy Name") { MTFileActions.copyName(node) }
-            Button(node.isDirectory ? "Open in Terminal" : "Open Folder in Terminal") {
+            Button(mtL("Copy Path")) { MTFileActions.copyPath(node) }
+            Button(mtL("Copy Name")) { MTFileActions.copyName(node) }
+            Button(node.isDirectory ? mtL("Open in Terminal") : mtL("Open Folder in Terminal")) {
                 MTFileActions.openTerminal(node)
             }
             Divider()
-            Button("Move to Trash", role: .destructive) { MTFileActions.moveToTrash(node) }
+            Button(mtL("Move to Trash"), role: .destructive) { MTFileActions.moveToTrash(node) }
         }
     }
 }
@@ -233,13 +233,13 @@ struct MTTreePane: View {
     @ViewBuilder
     private func treeHeader(_ c: MTTreeColumns) -> some View {
         HStack(spacing: 0) {
-            header("Name", c.name, .leading)
-            header("Size", c.size, .trailing)
-            header("Allocated", c.allocated, .trailing)
-            header("Files", c.files, .trailing)
-            header("% Disk", c.disk, .leading)
-            if c.showModified { header("Modified", c.modified, .leading) }
-            if c.showPath { header("Path", c.path, .leading) }
+            header(mtL("Name"), c.name, .leading)
+            header(mtL("Size"), c.size, .trailing)
+            header(mtL("Allocated"), c.allocated, .trailing)
+            header(mtL("Files"), c.files, .trailing)
+            header(mtL("% Disk"), c.disk, .leading)
+            if c.showModified { header(mtL("Modified"), c.modified, .leading) }
+            if c.showPath { header(mtL("Path"), c.path, .leading) }
         }
         .frame(width: c.width, alignment: .leading)
         .font(.caption.weight(.semibold))
@@ -554,16 +554,16 @@ struct MTExtensionPane: View {
                 HStack(spacing: 7) {
                     Image(systemName: "list.bullet.rectangle")
                         .foregroundStyle(Color.secondary)
-                    Text("File Types / Extensions")
+                    Text(mtL("File Types / Extensions"))
                         .font(.callout.weight(.semibold))
                     Spacer()
                     if model.isIndexing {
                         ProgressView().controlSize(.mini)
-                        Text("Indexing…")
+                        Text(mtL("Indexing…"))
                             .font(.caption2)
                             .foregroundStyle(Color.secondary)
                     } else {
-                        Text("\(model.stats.count.formatted()) extensions")
+                        Text("\(model.stats.count.formatted()) \(mtL("extensions"))")
                             .font(.caption2)
                             .foregroundStyle(Color.secondary)
                     }
@@ -600,9 +600,9 @@ struct MTExtensionPane: View {
                     HStack(spacing: 5) {
                         Image(systemName: "scope")
                         Text(selectedExtension).fontWeight(.semibold)
-                        Text("selected").foregroundStyle(Color.secondary)
+                        Text(mtL("selected")).foregroundStyle(Color.secondary)
                         Spacer()
-                        Button("Clear") { self.selectedExtension = nil }
+                        Button(mtL("Clear")) { self.selectedExtension = nil }
                             .buttonStyle(.plain)
                     }
                     .font(.caption2)
@@ -626,12 +626,12 @@ struct MTExtensionPane: View {
     private func extensionHeader(_ c: MTExtensionColumns) -> some View {
         HStack(spacing: 0) {
             extHeader("", c.color, .center)
-            extHeader("Extension", c.ext, .leading)
-            if c.showType { extHeader("File Type", c.type, .leading) }
-            extHeader("Percent", c.percent, .trailing)
-            if c.showLogical { extHeader("Size", c.logical, .trailing) }
-            extHeader("Allocated", c.allocated, .trailing)
-            extHeader("Files", c.files, .trailing)
+            extHeader(mtL("Extension"), c.ext, .leading)
+            if c.showType { extHeader(mtL("File Type"), c.type, .leading) }
+            extHeader(mtL("Percent"), c.percent, .trailing)
+            if c.showLogical { extHeader(mtL("Size"), c.logical, .trailing) }
+            extHeader(mtL("Allocated"), c.allocated, .trailing)
+            extHeader(mtL("Files"), c.files, .trailing)
         }
         .frame(width: c.width, alignment: .leading)
         .font(.caption.weight(.semibold))
@@ -684,7 +684,7 @@ private struct MTExtensionRow: View {
         .font(.callout)
         .background(selected ? Color.accentColor.opacity(0.30) : Color.clear)
         .overlay(alignment: .bottom) { Divider().opacity(0.22) }
-        .help("\(stat.extensionKey) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) allocated • \(stat.fileCount.formatted()) files")
+        .help("\(stat.extensionKey) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) \(mtL("Allocated").lowercased()) • \(stat.fileCount.formatted()) \(mtL("files"))")
     }
 
     private func extensionCell(_ text: String, _ width: CGFloat, _ alignment: Alignment, monospaced: Bool = false) -> some View {
@@ -700,35 +700,35 @@ private struct MTExtensionRow: View {
     private func extensionTypeName(_ key: String, category: MTCategory) -> String {
         let ext = key.hasPrefix(".") ? String(key.dropFirst()) : ""
         switch ext {
-        case "dylib": return "Dynamic Library"
-        case "framework": return "Framework"
-        case "metallib": return "Metal Library"
-        case "car": return "Asset Catalog"
-        case "plist": return "Property List"
-        case "strings", "stringsdict": return "Localization"
-        case "json": return "JSON Data"
-        case "xml": return "XML Data"
-        case "yaml", "yml", "toml", "ini", "cfg", "conf": return "Configuration"
-        case "db", "sqlite", "sqlite3": return "Database"
-        case "log": return "Log File"
-        case "swift": return "Swift Source"
-        case "c", "h", "cpp", "cc", "hpp": return "C/C++ Source"
-        case "js", "ts": return "JavaScript / TS"
-        case "py": return "Python Source"
-        case "pak", "vpk", "pck", "obb": return "Game Archive"
-        case "assets", "asset", "res", "ress", "resource": return "Resource Data"
-        case "bundle": return "Bundle Data"
-        case "mov", "mp4", "m4v", "mkv", "avi", "webm": return "Video"
-        case "png", "jpg", "jpeg", "heic", "gif", "webp": return "Image"
-        case "mp3", "m4a", "aac", "wav", "flac", "ogg", "bank": return "Audio"
-        case "zip", "7z", "rar", "tar", "gz", "xz": return "Archive"
-        case "dmg": return "Disk Image"
-        case "pkg": return "Installer Package"
-        case "pdf": return "PDF Document"
-        case "txt", "md", "rtf": return "Text Document"
-        case "app": return "Application"
-        case "": return key == "(no extension)" ? "No Extension" : "File"
-        default: return category == .other ? "File" : category.rawValue
+        case "dylib": return mtL("Dynamic Library")
+        case "framework": return mtL("Framework")
+        case "metallib": return mtL("Metal Library")
+        case "car": return mtL("Asset Catalog")
+        case "plist": return mtL("Property List")
+        case "strings", "stringsdict": return mtL("Localization")
+        case "json": return mtL("JSON Data")
+        case "xml": return mtL("XML Data")
+        case "yaml", "yml", "toml", "ini", "cfg", "conf": return mtL("Configuration")
+        case "db", "sqlite", "sqlite3": return mtL("Database")
+        case "log": return mtL("Log File")
+        case "swift": return mtL("Swift Source")
+        case "c", "h", "cpp", "cc", "hpp": return mtL("C/C++ Source")
+        case "js", "ts": return mtL("JavaScript / TS")
+        case "py": return mtL("Python Source")
+        case "pak", "vpk", "pck", "obb": return mtL("Game Archive")
+        case "assets", "asset", "res", "ress", "resource": return mtL("Resource Data")
+        case "bundle": return mtL("Bundle Data")
+        case "mov", "mp4", "m4v", "mkv", "avi", "webm": return mtL("Video")
+        case "png", "jpg", "jpeg", "heic", "gif", "webp": return mtL("Image")
+        case "mp3", "m4a", "aac", "wav", "flac", "ogg", "bank": return mtL("Audio")
+        case "zip", "7z", "rar", "tar", "gz", "xz": return mtL("Archive")
+        case "dmg": return mtL("Disk Image")
+        case "pkg": return mtL("Installer Package")
+        case "pdf": return mtL("PDF Document")
+        case "txt", "md", "rtf": return mtL("Text Document")
+        case "app": return mtL("Application")
+        case "": return key == "(no extension)" ? mtL("No Extension") : mtL("File")
+        default: return category == .other ? mtL("File") : mtL(category.rawValue)
         }
     }
 }
