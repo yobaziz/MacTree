@@ -400,7 +400,6 @@ struct MainView: View {
     @State private var searchText = ""
     @State private var selectedID: Int?
     @State private var expandedIDs: Set<Int> = []
-    @State private var treemapFocusID = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -415,7 +414,7 @@ struct MainView: View {
 
                 TreemapView(
                     nodes: controller.nodes,
-                    focusID: $treemapFocusID,
+                    rootID: controller.rootID,
                     selectedID: $selectedID
                 )
                 .frame(minHeight: 310)
@@ -427,7 +426,6 @@ struct MainView: View {
         .onChange(of: controller.scanVersion) { _, _ in
             selectedID = nil
             expandedIDs.removeAll()
-            treemapFocusID = controller.rootID
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -544,8 +542,7 @@ struct MainView: View {
                             onOpen: {
                                 selectedID = row.node.id
                                 if row.node.isDirectory && !row.node.children.isEmpty {
-                                    treemapFocusID = row.node.id
-                                    expandedIDs.insert(row.node.id)
+                                    toggleExpanded(row.node.id)
                                 }
                             }
                         )
@@ -797,9 +794,17 @@ private struct TreeRowView: View {
 // MARK: - Treemap
 
 private struct TreemapCell: Identifiable {
+    enum Kind {
+        case directory
+        case file
+    }
+
     let nodeID: Int
     let rect: CGRect
-    var id: Int { nodeID }
+    let depth: Int
+    let kind: Kind
+
+    var id: String { "\(nodeID)-\(depth)" }
 }
 
 private struct SquarifiedTreemapLayout {
@@ -811,6 +816,17 @@ private struct SquarifiedTreemapLayout {
     let nodes: [FileNode]
 
     func build(ids: [Int], in bounds: CGRect) -> [TreemapCell] {
+        layout(ids: ids, in: bounds).map {
+            TreemapCell(nodeID: $0.nodeID, rect: $0.rect, depth: 0, kind: nodes[$0.nodeID].isDirectory ? .directory : .file)
+        }
+    }
+
+    private struct BasicCell {
+        let nodeID: Int
+        let rect: CGRect
+    }
+
+    private func layout(ids: [Int], in bounds: CGRect) -> [BasicCell] {
         guard bounds.width > 1, bounds.height > 1 else { return [] }
 
         let valid = ids.filter {
@@ -830,7 +846,7 @@ private struct SquarifiedTreemapLayout {
         }
         items.sort { $0.area > $1.area }
 
-        var output: [TreemapCell] = []
+        var output: [BasicCell] = []
         var remaining = bounds
         var row: [WeightedItem] = []
 
@@ -872,7 +888,7 @@ private struct SquarifiedTreemapLayout {
     private func layoutRow(
         _ row: [WeightedItem],
         in remaining: inout CGRect,
-        output: inout [TreemapCell]
+        output: inout [BasicCell]
     ) {
         guard !row.isEmpty else { return }
         let rowArea = row.reduce(CGFloat(0)) { $0 + $1.area }
@@ -889,13 +905,17 @@ private struct SquarifiedTreemapLayout {
                     height = stripWidth > 0 ? item.area / stripWidth : 0
                 }
 
-                let rect = CGRect(
-                    x: remaining.minX,
-                    y: y,
-                    width: max(0, stripWidth),
-                    height: max(0, height)
+                output.append(
+                    BasicCell(
+                        nodeID: item.nodeID,
+                        rect: CGRect(
+                            x: remaining.minX,
+                            y: y,
+                            width: max(0, stripWidth),
+                            height: max(0, height)
+                        )
+                    )
                 )
-                output.append(TreemapCell(nodeID: item.nodeID, rect: rect))
                 y += height
             }
 
@@ -917,13 +937,17 @@ private struct SquarifiedTreemapLayout {
                     width = stripHeight > 0 ? item.area / stripHeight : 0
                 }
 
-                let rect = CGRect(
-                    x: x,
-                    y: remaining.minY,
-                    width: max(0, width),
-                    height: max(0, stripHeight)
+                output.append(
+                    BasicCell(
+                        nodeID: item.nodeID,
+                        rect: CGRect(
+                            x: x,
+                            y: remaining.minY,
+                            width: max(0, width),
+                            height: max(0, stripHeight)
+                        )
+                    )
                 )
-                output.append(TreemapCell(nodeID: item.nodeID, rect: rect))
                 x += width
             }
 
@@ -937,20 +961,112 @@ private struct SquarifiedTreemapLayout {
     }
 }
 
+private struct HierarchicalTreemapLayout {
+    let nodes: [FileNode]
+    let maxDepth: Int = 9
+    let maxCells: Int = 5500
+    let minRecursiveArea: CGFloat = 120
+
+    private let topLevelInset: CGFloat = 1
+    private let childInset: CGFloat = 1
+
+    func build(rootID: Int, in bounds: CGRect) -> [TreemapCell] {
+        guard nodes.indices.contains(rootID), bounds.width > 2, bounds.height > 2 else { return [] }
+
+        let rootChildren = nodes[rootID].children.filter {
+            nodes.indices.contains($0) && nodes[$0].allocatedSize > 0
+        }
+        guard !rootChildren.isEmpty else { return [] }
+
+        let basic = SquarifiedTreemapLayout(nodes: nodes)
+        let top = basic.build(ids: rootChildren, in: bounds.insetBy(dx: topLevelInset, dy: topLevelInset))
+
+        var result: [TreemapCell] = []
+        result.reserveCapacity(min(maxCells, 2500))
+
+        for cell in top {
+            appendNode(cell.nodeID, rect: cell.rect, depth: 0, result: &result)
+            if result.count >= maxCells { break }
+        }
+
+        return result
+    }
+
+    private func appendNode(
+        _ nodeID: Int,
+        rect: CGRect,
+        depth: Int,
+        result: inout [TreemapCell]
+    ) {
+        guard result.count < maxCells,
+              nodes.indices.contains(nodeID),
+              rect.width > 0.8,
+              rect.height > 0.8 else { return }
+
+        let node = nodes[nodeID]
+        let kind: TreemapCell.Kind = node.isDirectory ? .directory : .file
+        result.append(TreemapCell(nodeID: nodeID, rect: rect, depth: depth, kind: kind))
+
+        guard node.isDirectory,
+              depth < maxDepth,
+              !node.children.isEmpty,
+              rect.width * rect.height >= minRecursiveArea,
+              rect.width > 7,
+              rect.height > 7,
+              result.count < maxCells else { return }
+
+        let headerHeight: CGFloat
+        if rect.width > 85 && rect.height > 34 {
+            headerHeight = min(16, max(10, rect.height * 0.08))
+        } else {
+            headerHeight = 2
+        }
+
+        let contentRect = CGRect(
+            x: rect.minX + childInset,
+            y: rect.minY + headerHeight,
+            width: max(0, rect.width - childInset * 2),
+            height: max(0, rect.height - headerHeight - childInset)
+        )
+
+        guard contentRect.width > 3, contentRect.height > 3 else { return }
+
+        let children = node.children.filter {
+            nodes.indices.contains($0) && nodes[$0].allocatedSize > 0
+        }
+        guard !children.isEmpty else { return }
+
+        let engine = SquarifiedTreemapLayout(nodes: nodes)
+        let childCells = engine.build(ids: children, in: contentRect)
+
+        for childCell in childCells {
+            appendNode(
+                childCell.nodeID,
+                rect: childCell.rect.insetBy(dx: 0.35, dy: 0.35),
+                depth: depth + 1,
+                result: &result
+            )
+            if result.count >= maxCells { break }
+        }
+    }
+}
+
 private struct HoverState {
     let nodeID: Int
     let point: CGPoint
+    let depth: Int
 }
 
 private struct TreemapView: View {
     let nodes: [FileNode]
-    @Binding var focusID: Int
+    let rootID: Int
     @Binding var selectedID: Int?
     @State private var hoverState: HoverState?
 
-    private let palette: [Color] = [
+    private let extensionPalette: [Color] = [
         .blue, .green, .purple, .orange, .teal,
-        .pink, .indigo, .red, .cyan, .mint
+        .pink, .indigo, .red, .cyan, .mint,
+        .yellow, .brown
     ]
 
     var body: some View {
@@ -968,46 +1084,31 @@ private struct TreemapView: View {
                 ZStack(alignment: .topLeading) {
                     Canvas { context, size in
                         let drawingBounds = CGRect(origin: .zero, size: size)
-                        context.fill(Path(drawingBounds), with: .color(Color(nsColor: .windowBackgroundColor)))
+                        context.fill(
+                            Path(drawingBounds),
+                            with: .color(Color(nsColor: .windowBackgroundColor))
+                        )
 
                         for cell in cells {
                             guard nodes.indices.contains(cell.nodeID) else { continue }
                             let node = nodes[cell.nodeID]
-                            let rect = cell.rect.integral.insetBy(dx: 0.5, dy: 0.5)
-                            guard rect.width > 0.5, rect.height > 0.5 else { continue }
+                            let rect = cell.rect
+                            guard rect.width > 0.55, rect.height > 0.55 else { continue }
 
-                            let color = tileColor(node: node)
-                            context.fill(Path(rect), with: .color(color.opacity(0.84)))
-
-                            let strokeColor = selectedID == node.id
-                                ? Color.white
-                                : Color.black.opacity(0.42)
-                            context.stroke(
-                                Path(rect),
-                                with: .color(strokeColor),
-                                lineWidth: selectedID == node.id ? 2.4 : 0.8
-                            )
-
-                            if rect.width > 74 && rect.height > 35 {
-                                let title = Text(node.name)
-                                    .font(rect.width > 165 && rect.height > 72 ? .callout.weight(.semibold) : .caption.weight(.semibold))
-                                    .foregroundStyle(Color.white)
-                                context.draw(
-                                    title,
-                                    at: CGPoint(x: rect.minX + 6, y: rect.minY + 5),
-                                    anchor: .topLeading
+                            if node.isDirectory {
+                                drawDirectory(
+                                    context: &context,
+                                    node: node,
+                                    cell: cell,
+                                    selected: selectedID == node.id
                                 )
-
-                                if rect.width > 90 && rect.height > 54 {
-                                    let subtitle = Text(formatBytes(node.allocatedSize))
-                                        .font(.caption2)
-                                        .foregroundStyle(Color.white.opacity(0.9))
-                                    context.draw(
-                                        subtitle,
-                                        at: CGPoint(x: rect.minX + 6, y: rect.minY + 23),
-                                        anchor: .topLeading
-                                    )
-                                }
+                            } else {
+                                drawFile(
+                                    context: &context,
+                                    node: node,
+                                    cell: cell,
+                                    selected: selectedID == node.id
+                                )
                             }
                         }
                     }
@@ -1026,21 +1127,12 @@ private struct TreemapView: View {
                             selectedID = id
                         }
                     }
-                    .onTapGesture(count: 2) {
-                        guard let id = hoverState?.nodeID,
-                              nodes.indices.contains(id) else { return }
-                        let node = nodes[id]
-                        if node.isDirectory && !node.children.isEmpty {
-                            focusID = id
-                            selectedID = id
-                            hoverState = nil
-                        }
-                    }
 
                     if let hoverState,
                        nodes.indices.contains(hoverState.nodeID) {
                         hoverCard(
                             node: nodes[hoverState.nodeID],
+                            depth: hoverState.depth,
                             point: hoverState.point,
                             containerSize: canvasSize
                         )
@@ -1055,22 +1147,16 @@ private struct TreemapView: View {
 
     private var treemapToolbar: some View {
         HStack(spacing: 8) {
-            Button(action: goBack) {
-                Image(systemName: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-            .disabled(parentOfFocus == nil)
-
             Image(systemName: "square.grid.3x3.fill")
                 .foregroundStyle(Color.secondary)
 
-            Text(focusTitle)
+            Text(rootTitle)
                 .font(.callout.weight(.semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            if nodes.indices.contains(focusID) {
-                Text(formatBytes(nodes[focusID].allocatedSize))
+            if nodes.indices.contains(rootID) {
+                Text(formatBytes(nodes[rootID].allocatedSize))
                     .font(.caption)
                     .foregroundStyle(Color.secondary)
                     .monospacedDigit()
@@ -1078,7 +1164,7 @@ private struct TreemapView: View {
 
             Spacer()
 
-            Text("Hover for details • double-click a folder to open")
+            Text("WizTree view • all folders expanded visually • hover for details")
                 .font(.caption)
                 .foregroundStyle(Color.secondary)
         }
@@ -1087,63 +1173,146 @@ private struct TreemapView: View {
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.9))
     }
 
-    private var focusTitle: String {
-        guard nodes.indices.contains(focusID) else { return "Treemap" }
-        return nodes[focusID].path
-    }
-
-    private var parentOfFocus: Int? {
-        guard nodes.indices.contains(focusID) else { return nil }
-        return nodes[focusID].parentID
-    }
-
-    private func goBack() {
-        if let parent = parentOfFocus {
-            focusID = parent
-            selectedID = parent
-            hoverState = nil
-        }
+    private var rootTitle: String {
+        guard nodes.indices.contains(rootID) else { return "Treemap" }
+        return nodes[rootID].path
     }
 
     private func makeCells(size: CGSize) -> [TreemapCell] {
-        guard nodes.indices.contains(focusID), size.width > 2, size.height > 2 else { return [] }
-
-        let ids = nodes[focusID].children.filter {
-            nodes.indices.contains($0) && nodes[$0].allocatedSize > 0
-        }
-        guard !ids.isEmpty else { return [] }
-
-        let engine = SquarifiedTreemapLayout(nodes: nodes)
+        let engine = HierarchicalTreemapLayout(nodes: nodes)
         return engine.build(
-            ids: ids,
+            rootID: rootID,
             in: CGRect(x: 0, y: 0, width: size.width, height: size.height)
         )
     }
 
     private func updateHover(point: CGPoint, cells: [TreemapCell]) {
-        if let cell = cells.first(where: { $0.rect.contains(point) }) {
-            hoverState = HoverState(nodeID: cell.nodeID, point: point)
+        var best: TreemapCell?
+
+        for cell in cells where cell.rect.contains(point) {
+            if best == nil || cell.depth >= best!.depth {
+                best = cell
+            }
+        }
+
+        if let best {
+            hoverState = HoverState(nodeID: best.nodeID, point: point, depth: best.depth)
         } else {
             hoverState = nil
         }
     }
 
-    private func tileColor(node: FileNode) -> Color {
-        if !node.isDirectory {
-            let ext = (node.name as NSString).pathExtension.lowercased()
-            if ["mp4", "mov", "mkv", "avi"].contains(ext) { return .purple }
-            if ["jpg", "jpeg", "png", "heic", "gif"].contains(ext) { return .pink }
-            if ["zip", "7z", "rar", "dmg", "pkg"].contains(ext) { return .orange }
-        }
+    private func drawDirectory(
+        context: inout GraphicsContext,
+        node: FileNode,
+        cell: TreemapCell,
+        selected: Bool
+    ) {
+        let rect = cell.rect
+        let depthShade = min(0.19, Double(cell.depth) * 0.018)
 
-        if node.name.hasSuffix(".app") { return .green }
-        return palette[abs(node.id &* 31) % palette.count]
+        context.fill(
+            Path(rect),
+            with: .color(Color.black.opacity(0.17 + depthShade))
+        )
+
+        let border = selected
+            ? Color.white
+            : Color.white.opacity(cell.depth == 0 ? 0.46 : 0.22)
+        context.stroke(
+            Path(rect),
+            with: .color(border),
+            lineWidth: selected ? 2.2 : (cell.depth == 0 ? 1.5 : 0.75)
+        )
+
+        if rect.width > 86 && rect.height > 33 {
+            let title = Text(node.name)
+                .font(cell.depth == 0 ? .caption.weight(.bold) : .caption2.weight(.semibold))
+                .foregroundStyle(Color.white.opacity(0.94))
+
+            context.draw(
+                title,
+                at: CGPoint(x: rect.minX + 5, y: rect.minY + 2),
+                anchor: .topLeading
+            )
+        }
+    }
+
+    private func drawFile(
+        context: inout GraphicsContext,
+        node: FileNode,
+        cell: TreemapCell,
+        selected: Bool
+    ) {
+        let rect = cell.rect
+        let base = fileColor(node)
+
+        let shading = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [base.opacity(0.97), base.opacity(0.67)]),
+            startPoint: CGPoint(x: rect.minX, y: rect.minY),
+            endPoint: CGPoint(x: rect.maxX, y: rect.maxY)
+        )
+        context.fill(Path(rect), with: shading)
+
+        let border = selected ? Color.white : Color.black.opacity(0.45)
+        context.stroke(
+            Path(rect),
+            with: .color(border),
+            lineWidth: selected ? 2.1 : 0.55
+        )
+
+        if rect.width > 62 && rect.height > 28 {
+            let title = Text(node.name)
+                .font(rect.width > 135 && rect.height > 55 ? .caption.weight(.semibold) : .caption2.weight(.semibold))
+                .foregroundStyle(Color.white)
+            context.draw(
+                title,
+                at: CGPoint(x: rect.minX + 4, y: rect.minY + 3),
+                anchor: .topLeading
+            )
+
+            if rect.width > 90 && rect.height > 48 {
+                let size = Text(formatBytes(node.allocatedSize))
+                    .font(.caption2)
+                    .foregroundStyle(Color.white.opacity(0.9))
+                context.draw(
+                    size,
+                    at: CGPoint(x: rect.minX + 4, y: rect.minY + 19),
+                    anchor: .topLeading
+                )
+            }
+        }
+    }
+
+    private func fileColor(_ node: FileNode) -> Color {
+        let ext = (node.name as NSString).pathExtension.lowercased()
+
+        switch ext {
+        case "app", "dylib", "so": return .green
+        case "mp4", "mov", "mkv", "avi", "webm": return .purple
+        case "jpg", "jpeg", "png", "heic", "gif", "webp", "tiff": return .pink
+        case "zip", "7z", "rar", "tar", "gz", "dmg", "pkg", "iso": return .orange
+        case "mp3", "aac", "m4a", "wav", "flac", "ogg": return .cyan
+        case "pdf", "doc", "docx", "pages", "txt", "rtf": return .blue
+        case "swift", "c", "cpp", "h", "hpp", "js", "ts", "py", "json", "xml": return .teal
+        default:
+            var hash = 5381
+            for byte in ext.utf8 {
+                hash = ((hash << 5) &+ hash) &+ Int(byte)
+            }
+            return extensionPalette[abs(hash) % extensionPalette.count]
+        }
     }
 
     @ViewBuilder
-    private func hoverCard(node: FileNode, point: CGPoint, containerSize: CGSize) -> some View {
-        let cardWidth: CGFloat = 320
-        let cardHeight: CGFloat = 82
+    private func hoverCard(
+        node: FileNode,
+        depth: Int,
+        point: CGPoint,
+        containerSize: CGSize
+    ) -> some View {
+        let cardWidth: CGFloat = 330
+        let cardHeight: CGFloat = 92
         let xCandidate = point.x + cardWidth / 2 + 16
         let x = min(
             max(xCandidate, cardWidth / 2 + 8),
@@ -1158,6 +1327,8 @@ private struct TreemapView: View {
 
         VStack(alignment: .leading, spacing: 3) {
             HStack {
+                Image(systemName: node.isDirectory ? "folder.fill" : "doc.fill")
+                    .foregroundStyle(node.isDirectory ? Color.blue : fileColor(node))
                 Text(node.name)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
@@ -1173,9 +1344,16 @@ private struct TreemapView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            Text(node.isDirectory ? "\(node.fileCount.formatted()) files" : "File")
-                .font(.caption2)
-                .foregroundStyle(Color.secondary)
+            HStack(spacing: 8) {
+                Text(node.isDirectory ? "\(node.fileCount.formatted()) files" : "File")
+                Text("Depth \(depth)")
+                if !node.isDirectory {
+                    let ext = (node.name as NSString).pathExtension
+                    if !ext.isEmpty { Text(".\(ext)") }
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(Color.secondary)
         }
         .padding(9)
         .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
