@@ -112,11 +112,11 @@ private struct MTWeightedLayout {
 
 private struct MTTreemapBuilder {
     let nodes: [MTNode]
-    private let maxCells = 2200
+    private let maxCells = 1800
     private let maxDepth = 12
-    private let minExpandArea: CGFloat = 170
+    private let minExpandArea: CGFloat = 180
     private let minExpandSide: CGFloat = 10
-    private let maxChildrenPerFolder = 58
+    private let maxChildrenPerFolder = 54
 
     func build(rootID: Int, size: CGSize) -> MTRenderModel {
         guard nodes.indices.contains(rootID), size.width.isFinite, size.height.isFinite,
@@ -133,7 +133,7 @@ private struct MTTreemapBuilder {
         var cells: [MTCell] = []
         var frames: [MTFrame] = []
         cells.reserveCapacity(maxCells)
-        frames.reserveCapacity(650)
+        frames.reserveCapacity(600)
 
         var remainingBudget = maxCells
         for (i, pair) in rootRects.enumerated() {
@@ -254,8 +254,8 @@ private struct MTTreemapBuilder {
     }
 
     private func makeModel(_ cells: [MTCell], _ frames: [MTFrame], _ size: CGSize) -> MTRenderModel {
-        let cols = max(14, min(56, Int(max(1, size.width) / 26)))
-        let rows = max(9, min(38, Int(max(1, size.height) / 26)))
+        let cols = max(16, min(64, Int(max(1, size.width) / 24)))
+        let rows = max(10, min(42, Int(max(1, size.height) / 24)))
         var buckets = Array(repeating: [Int](), count: max(1, cols * rows))
         for (index, cell) in cells.enumerated() {
             let r = cell.rect.standardized
@@ -272,14 +272,22 @@ private struct MTTreemapBuilder {
             guard minX <= maxX, minY <= maxY else { continue }
             for y in minY...maxY {
                 for x in minX...maxX {
-                    let b = y * cols + x
-                    if buckets.indices.contains(b) { buckets[b].append(index) }
+                    let bucket = y * cols + x
+                    if buckets.indices.contains(bucket) { buckets[bucket].append(index) }
                 }
             }
         }
         return MTRenderModel(cells: cells, frames: frames, buckets: buckets,
                              cols: cols, rows: rows, size: size)
     }
+}
+
+private struct MTBuildKey: Hashable {
+    let nodeCount: Int
+    let rootID: Int
+    let rootAllocated: UInt64
+    let widthBucket: Int
+    let heightBucket: Int
 }
 
 struct MTTreemap: View {
@@ -310,11 +318,8 @@ struct MTTreemap: View {
             legend
             Divider()
 
-            GeometryReader { proxy in
-                let size = CGSize(width: max(1, proxy.size.width), height: max(1, proxy.size.height))
-                let model = MTTreemapBuilder(nodes: nodes).build(rootID: rootID, size: size)
-                MTSurface(nodes: nodes, model: model, selectedID: $selectedID, hoveredID: $hoveredID)
-            }
+            MTTreemapViewport(nodes: nodes, rootID: rootID,
+                              selectedID: $selectedID, hoveredID: $hoveredID)
         }
     }
 
@@ -334,6 +339,43 @@ struct MTTreemap: View {
     }
 
     private var rootPath: String { nodes.indices.contains(rootID) ? nodes[rootID].path : "Treemap" }
+}
+
+private struct MTTreemapViewport: View {
+    let nodes: [MTNode]
+    let rootID: Int
+    @Binding var selectedID: Int?
+    @Binding var hoveredID: Int?
+
+    @State private var model = MTRenderModel.empty()
+    @State private var renderToken = 0
+    @State private var builtKey: MTBuildKey?
+
+    var body: some View {
+        GeometryReader { proxy in
+            let size = CGSize(width: max(1, proxy.size.width), height: max(1, proxy.size.height))
+            let rootAllocated = nodes.indices.contains(rootID) ? nodes[rootID].allocatedSize : 0
+            let key = MTBuildKey(nodeCount: nodes.count,
+                                 rootID: rootID,
+                                 rootAllocated: rootAllocated,
+                                 widthBucket: Int(size.width / 6),
+                                 heightBucket: Int(size.height / 6))
+
+            MTSurface(nodes: nodes, model: model, renderToken: renderToken,
+                      selectedID: $selectedID, hoveredID: $hoveredID)
+                .onAppear { rebuildIfNeeded(key: key, size: size) }
+                .onChange(of: key) { _, newKey in
+                    rebuildIfNeeded(key: newKey, size: size)
+                }
+        }
+    }
+
+    private func rebuildIfNeeded(key: MTBuildKey, size: CGSize) {
+        guard builtKey != key else { return }
+        builtKey = key
+        model = MTTreemapBuilder(nodes: nodes).build(rootID: rootID, size: size)
+        renderToken &+= 1
+    }
 }
 
 private struct MTDiskCapacityBar: View {
@@ -368,7 +410,6 @@ private struct MTDiskCapacityBar: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.62))
-        .help("Disk capacity: scanned selection, other used space, and free space")
     }
 
     @ViewBuilder
@@ -393,111 +434,161 @@ private struct MTDiskCapacityBar: View {
     }
 }
 
+private struct MTBaseCanvas: View, Equatable {
+    let nodes: [MTNode]
+    let model: MTRenderModel
+    let renderToken: Int
+
+    static func == (lhs: MTBaseCanvas, rhs: MTBaseCanvas) -> Bool {
+        lhs.renderToken == rhs.renderToken
+    }
+
+    var body: some View {
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: true) { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)),
+                         with: .color(Color(nsColor: .windowBackgroundColor)))
+
+            for cell in model.cells {
+                guard nodes.indices.contains(cell.nodeID), mtRectFinite(cell.rect) else { continue }
+                let base = cell.category.color
+                let gradient = GraphicsContext.Shading.linearGradient(
+                    Gradient(colors: [base.opacity(0.92), base.opacity(0.67)]),
+                    startPoint: CGPoint(x: cell.rect.minX, y: cell.rect.minY),
+                    endPoint: CGPoint(x: cell.rect.maxX, y: cell.rect.maxY))
+                context.fill(Path(cell.rect), with: gradient)
+                context.stroke(Path(cell.rect), with: .color(Color.black.opacity(0.38)), lineWidth: 0.45)
+
+                if cell.rect.width > 50 && cell.rect.height > 18 {
+                    let maxChars = max(4, Int(cell.rect.width / 6.2))
+                    let title = Text(mtEllipsize(cell.label, maxCharacters: maxChars))
+                        .font(.system(size: cell.rect.width > 110 && cell.rect.height > 38 ? 9 : 8, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                    context.draw(title,
+                                 at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 2.5),
+                                 anchor: .topLeading)
+                    if cell.rect.width > 105 && cell.rect.height > 43 {
+                        let sub = Text(mtBytes(cell.representedAllocated))
+                            .font(.system(size: 7.5))
+                            .foregroundStyle(Color.white.opacity(0.82))
+                        context.draw(sub,
+                                     at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 14.5),
+                                     anchor: .topLeading)
+                    }
+                }
+            }
+
+            for frame in model.frames {
+                guard nodes.indices.contains(frame.nodeID), mtRectFinite(frame.rect) else { continue }
+                if let header = frame.headerRect, mtRectFinite(header) {
+                    context.fill(Path(header),
+                                 with: .color(Color.black.opacity(frame.depth == 0 ? 0.48 : 0.34)))
+                    let maxChars = max(5, Int(header.width / 6.0))
+                    let label = Text(mtEllipsize(nodes[frame.nodeID].name, maxCharacters: maxChars))
+                        .font(.system(size: frame.depth <= 1 ? 8.5 : 8, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.94))
+                    context.draw(label,
+                                 at: CGPoint(x: header.minX + 3.5, y: header.minY + 0.5),
+                                 anchor: .topLeading)
+                }
+                context.stroke(Path(frame.rect),
+                               with: .color(Color.white.opacity(frame.depth == 0 ? 0.30 : 0.13)),
+                               lineWidth: frame.depth == 0 ? 0.9 : 0.45)
+            }
+        }
+    }
+}
+
 private struct MTSurface: View {
     let nodes: [MTNode]
     let model: MTRenderModel
+    let renderToken: Int
     @Binding var selectedID: Int?
     @Binding var hoveredID: Int?
+
     @State private var hoveredCellIndex: Int?
     @State private var hoverAnchor: CGPoint = .zero
+    @State private var localHoveredNodeID: Int?
+    @State private var hoverPublishTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
-                Canvas { context, size in
-                    context.fill(Path(CGRect(origin: .zero, size: size)),
-                                 with: .color(Color(nsColor: .windowBackgroundColor)))
+                MTBaseCanvas(nodes: nodes, model: model, renderToken: renderToken)
+                    .equatable()
 
-                    for cell in model.cells {
-                        guard nodes.indices.contains(cell.nodeID), mtRectFinite(cell.rect) else { continue }
-                        let base = cell.category.color
-                        let gradient = GraphicsContext.Shading.linearGradient(
-                            Gradient(colors: [base.opacity(0.92), base.opacity(0.67)]),
-                            startPoint: CGPoint(x: cell.rect.minX, y: cell.rect.minY),
-                            endPoint: CGPoint(x: cell.rect.maxX, y: cell.rect.maxY))
-                        context.fill(Path(cell.rect), with: gradient)
+                selectionOverlay
+                    .allowsHitTesting(false)
 
-                        let selected = selectedID == cell.nodeID
-                        let hovered = hoveredID == cell.nodeID
-                        context.stroke(Path(cell.rect),
-                                       with: .color(selected ? Color.white : (hovered ? Color.accentColor : Color.black.opacity(0.38))),
-                                       lineWidth: selected ? 2.2 : (hovered ? 1.6 : 0.45))
-
-                        if cell.rect.width > 50 && cell.rect.height > 18 {
-                            let maxChars = max(4, Int(cell.rect.width / 6.2))
-                            let title = Text(mtEllipsize(cell.label, maxCharacters: maxChars))
-                                .font(.system(size: cell.rect.width > 110 && cell.rect.height > 38 ? 9 : 8, weight: .semibold))
-                                .foregroundStyle(Color.white)
-                            context.draw(title,
-                                         at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 2.5),
-                                         anchor: .topLeading)
-                            if cell.rect.width > 105 && cell.rect.height > 43 {
-                                let sub = Text(mtBytes(cell.representedAllocated))
-                                    .font(.system(size: 7.5))
-                                    .foregroundStyle(Color.white.opacity(0.82))
-                                context.draw(sub,
-                                             at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 14.5),
-                                             anchor: .topLeading)
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let point):
+                            let hit = model.hitTest(point)
+                            if hit != hoveredCellIndex {
+                                hoveredCellIndex = hit
+                                hoverAnchor = point
+                                let id = hit.flatMap { model.cells.indices.contains($0) ? model.cells[$0].nodeID : nil }
+                                localHoveredNodeID = id
+                                publishHover(id)
                             }
+                        case .ended:
+                            hoveredCellIndex = nil
+                            localHoveredNodeID = nil
+                            publishHover(nil)
                         }
                     }
-
-                    for frame in model.frames {
-                        guard nodes.indices.contains(frame.nodeID), mtRectFinite(frame.rect) else { continue }
-                        if let header = frame.headerRect, mtRectFinite(header) {
-                            context.fill(Path(header),
-                                         with: .color(Color.black.opacity(frame.depth == 0 ? 0.48 : 0.34)))
-                            let maxChars = max(5, Int(header.width / 6.0))
-                            let label = Text(mtEllipsize(nodes[frame.nodeID].name, maxCharacters: maxChars))
-                                .font(.system(size: frame.depth <= 1 ? 8.5 : 8, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.94))
-                            context.draw(label,
-                                         at: CGPoint(x: header.minX + 3.5, y: header.minY + 0.5),
-                                         anchor: .topLeading)
+                    .onTapGesture {
+                        if let id = localHoveredNodeID { selectedID = id }
+                    }
+                    .contextMenu {
+                        if let id = localHoveredNodeID, nodes.indices.contains(id) {
+                            MTFileContextMenu(node: nodes[id])
                         }
-
-                        let selected = selectedID == frame.nodeID
-                        let hovered = hoveredID == frame.nodeID
-                        context.stroke(Path(frame.rect),
-                                       with: .color(selected ? Color.white : (hovered ? Color.accentColor : Color.white.opacity(frame.depth == 0 ? 0.30 : 0.13))),
-                                       lineWidth: selected ? 2.4 : (hovered ? 1.7 : (frame.depth == 0 ? 0.9 : 0.45)))
                     }
-                }
-                .contentShape(Rectangle())
-                .onContinuousHover { phase in
-                    switch phase {
-                    case .active(let point):
-                        let hit = model.hitTest(point)
-                        if hit != hoveredCellIndex {
-                            hoveredCellIndex = hit
-                            hoverAnchor = point
-                            if let hit, model.cells.indices.contains(hit) {
-                                hoveredID = model.cells[hit].nodeID
-                            } else {
-                                hoveredID = nil
-                            }
-                        }
-                    case .ended:
-                        hoveredCellIndex = nil
-                        hoveredID = nil
-                    }
-                }
-                .onTapGesture {
-                    if let index = hoveredCellIndex, model.cells.indices.contains(index) {
-                        selectedID = model.cells[index].nodeID
-                    }
-                }
-                .contextMenu {
-                    if let id = hoveredID, nodes.indices.contains(id) {
-                        MTFileContextMenu(node: nodes[id])
-                    }
-                }
 
                 if let index = hoveredCellIndex, model.cells.indices.contains(index) {
-                    hoverCard(model.cells[index], proxy.size).allowsHitTesting(false)
+                    hoverCard(model.cells[index], proxy.size)
+                        .allowsHitTesting(false)
                 }
             }
             .clipped()
+        }
+        .onDisappear {
+            hoverPublishTask?.cancel()
+        }
+    }
+
+    private var selectionOverlay: some View {
+        Canvas { context, _ in
+            if let selectedID {
+                drawHighlight(id: selectedID, color: Color.white, width: 2.4, context: &context)
+            }
+            if let localHoveredNodeID, localHoveredNodeID != selectedID {
+                drawHighlight(id: localHoveredNodeID, color: Color.accentColor, width: 1.7, context: &context)
+            }
+        }
+    }
+
+    private func drawHighlight(id: Int, color: Color, width: CGFloat, context: inout GraphicsContext) {
+        for cell in model.cells where cell.nodeID == id {
+            context.stroke(Path(cell.rect), with: .color(color), lineWidth: width)
+        }
+        for frame in model.frames where frame.nodeID == id {
+            context.stroke(Path(frame.rect), with: .color(color), lineWidth: width)
+        }
+    }
+
+    private func publishHover(_ id: Int?) {
+        hoverPublishTask?.cancel()
+        guard let id else {
+            hoveredID = nil
+            return
+        }
+        hoverPublishTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 35_000_000)
+            guard !Task.isCancelled else { return }
+            hoveredID = id
         }
     }
 
