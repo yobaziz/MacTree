@@ -111,12 +111,7 @@ actor DiskScanner {
             itemsVisited += 1
             publishCounter += 1
 
-            let fullPath: String
-            if rootPath == "/" {
-                fullPath = "/" + relative
-            } else {
-                fullPath = rootPath + "/" + relative
-            }
+            let fullPath = rootPath == "/" ? "/" + relative : rootPath + "/" + relative
             currentPath = fullPath
 
             var statInfo = stat()
@@ -124,17 +119,13 @@ actor DiskScanner {
                 lstat(pointer, &statInfo)
             }
 
-            if statResult != 0 {
-                continue
-            }
+            if statResult != 0 { continue }
 
             let fileType = statInfo.st_mode & mode_t(S_IFMT)
             let isDirectory = fileType == mode_t(S_IFDIR)
             let isSymlink = fileType == mode_t(S_IFLNK)
 
-            if isSymlink {
-                continue
-            }
+            if isSymlink { continue }
 
             if isDirectory && shouldSkipDirectory(relativePath: relative) {
                 enumerator.skipDescendants()
@@ -196,7 +187,6 @@ actor DiskScanner {
                 directoryIDByRelativePath[relative] = id
             }
 
-            // Publishing too often costs a surprising amount on large trees.
             if publishCounter >= 20_000 {
                 await progress(
                     ScanProgress(
@@ -212,7 +202,6 @@ actor DiskScanner {
             }
         }
 
-        // Roll file sizes up into every ancestor directory.
         if builders.count > 1 {
             for index in stride(from: builders.count - 1, through: 1, by: -1) {
                 guard let parentID = builders[index].parentID else { continue }
@@ -237,7 +226,6 @@ actor DiskScanner {
             )
         }
 
-        // Sort only once, after the scan is complete.
         let sizeReference = nodes
         for index in nodes.indices where !nodes[index].children.isEmpty {
             nodes[index].children.sort { lhs, rhs in
@@ -274,29 +262,14 @@ actor DiskScanner {
     }
 
     private func shouldSkipDirectory(relativePath: String) -> Bool {
-        // Never traverse other mounted volumes or synthetic system trees.
-        if relativePath == "Volumes" || relativePath.hasPrefix("Volumes/") {
-            return true
-        }
-        if relativePath == "dev" || relativePath.hasPrefix("dev/") {
-            return true
-        }
-        if relativePath == "System/Volumes" || relativePath.hasPrefix("System/Volumes/") {
-            return true
-        }
+        if relativePath == "Volumes" || relativePath.hasPrefix("Volumes/") { return true }
+        if relativePath == "dev" || relativePath.hasPrefix("dev/") { return true }
+        if relativePath == "System/Volumes" || relativePath.hasPrefix("System/Volumes/") { return true }
 
-        // iCloud / File Provider storage is intentionally excluded. Apart from being
-        // noisy in a disk-usage tool, walking these folders can trigger provider work.
         let marker = "/" + relativePath
-        if marker.contains("/Library/CloudStorage") {
-            return true
-        }
-        if marker.contains("/Library/Mobile Documents") {
-            return true
-        }
-        if marker.contains("/Library/Application Support/CloudDocs") {
-            return true
-        }
+        if marker.contains("/Library/CloudStorage") { return true }
+        if marker.contains("/Library/Mobile Documents") { return true }
+        if marker.contains("/Library/Application Support/CloudDocs") { return true }
 
         return false
     }
@@ -355,8 +328,6 @@ final class ScanController: ObservableObject {
     }
 
     func openFullDiskAccessSettings() {
-        // macOS never allows an app to grant itself Full Disk Access. Reveal the exact
-        // debug app so the user can add it, then open the correct Settings pane.
         NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -510,7 +481,6 @@ struct MainView: View {
                 )
             }
             .foregroundStyle(controller.fullDiskAccessGranted ? Color.green : Color.secondary)
-            .help("macOS requires Full Disk Access to be granted manually. MacTree will reveal the exact app and open System Settings.")
 
             Spacer()
 
@@ -545,8 +515,7 @@ struct MainView: View {
             Spacer()
 
             if controller.isScanning {
-                ProgressView()
-                    .controlSize(.small)
+                ProgressView().controlSize(.small)
             }
 
             Text(controller.elapsed.formatted(.number.precision(.fractionLength(1))) + " s")
@@ -610,8 +579,7 @@ struct MainView: View {
     private var statusBar: some View {
         HStack(spacing: 10) {
             if controller.isScanning {
-                ProgressView()
-                    .controlSize(.small)
+                ProgressView().controlSize(.small)
                 Text("Scanning \(controller.itemsVisited.formatted()) items")
                     .fontWeight(.semibold)
                 Text(controller.currentPath)
@@ -834,50 +802,137 @@ private struct TreemapCell: Identifiable {
     var id: Int { nodeID }
 }
 
-private struct StableTreemapLayout {
-    let nodes: [FileNode]
-    var cells: [TreemapCell] = []
-
-    mutating func build(ids: [Int], in rect: CGRect) -> [TreemapCell] {
-        layout(ids: ids, in: rect)
-        return cells
+private struct SquarifiedTreemapLayout {
+    struct WeightedItem {
+        let nodeID: Int
+        let area: CGFloat
     }
 
-    private mutating func layout(ids: [Int], in rect: CGRect) {
-        guard !ids.isEmpty, rect.width > 1, rect.height > 1 else { return }
+    let nodes: [FileNode]
 
-        if ids.count == 1 {
-            cells.append(TreemapCell(nodeID: ids[0], rect: rect.insetBy(dx: 0.5, dy: 0.5)))
-            return
+    func build(ids: [Int], in bounds: CGRect) -> [TreemapCell] {
+        guard bounds.width > 1, bounds.height > 1 else { return [] }
+
+        let valid = ids.filter {
+            nodes.indices.contains($0) && nodes[$0].allocatedSize > 0
+        }
+        guard !valid.isEmpty else { return [] }
+
+        let total = valid.reduce(UInt64(0)) { $0 + nodes[$1].allocatedSize }
+        guard total > 0 else { return [] }
+
+        let totalArea = bounds.width * bounds.height
+        var items = valid.map {
+            WeightedItem(
+                nodeID: $0,
+                area: totalArea * CGFloat(Double(nodes[$0].allocatedSize) / Double(total))
+            )
+        }
+        items.sort { $0.area > $1.area }
+
+        var output: [TreemapCell] = []
+        var remaining = bounds
+        var row: [WeightedItem] = []
+
+        while !items.isEmpty {
+            let candidate = items[0]
+            let side = max(1, min(remaining.width, remaining.height))
+
+            if row.isEmpty || worst(row + [candidate], side: side) <= worst(row, side: side) {
+                row.append(candidate)
+                items.removeFirst()
+            } else {
+                layoutRow(row, in: &remaining, output: &output)
+                row.removeAll(keepingCapacity: true)
+            }
         }
 
-        let sorted = ids.sorted { nodes[$0].allocatedSize > nodes[$1].allocatedSize }
-        let total = sorted.reduce(UInt64(0)) { $0 + nodes[$1].allocatedSize }
-        guard total > 0 else { return }
-
-        let half = Double(total) / 2
-        var running = 0.0
-        var splitIndex = 1
-
-        for index in 0..<(sorted.count - 1) {
-            running += Double(nodes[sorted[index]].allocatedSize)
-            splitIndex = index + 1
-            if running >= half { break }
+        if !row.isEmpty {
+            layoutRow(row, in: &remaining, output: &output)
         }
 
-        let first = Array(sorted[..<splitIndex])
-        let second = Array(sorted[splitIndex...])
-        let firstTotal = first.reduce(UInt64(0)) { $0 + nodes[$1].allocatedSize }
-        let fraction = min(0.985, max(0.015, Double(firstTotal) / Double(total)))
+        return output
+    }
 
-        if rect.width >= rect.height {
-            let firstWidth = rect.width * fraction
-            layout(ids: first, in: CGRect(x: rect.minX, y: rect.minY, width: firstWidth, height: rect.height))
-            layout(ids: second, in: CGRect(x: rect.minX + firstWidth, y: rect.minY, width: rect.width - firstWidth, height: rect.height))
+    private func worst(_ row: [WeightedItem], side: CGFloat) -> CGFloat {
+        guard !row.isEmpty else { return .greatestFiniteMagnitude }
+
+        let sum = row.reduce(CGFloat(0)) { $0 + $1.area }
+        let maxArea = row.map(\.area).max() ?? 0
+        let minArea = max(row.map(\.area).min() ?? 0, 0.0001)
+        let sideSquared = side * side
+        let sumSquared = sum * sum
+
+        return max(
+            sideSquared * maxArea / max(sumSquared, 0.0001),
+            sumSquared / max(sideSquared * minArea, 0.0001)
+        )
+    }
+
+    private func layoutRow(
+        _ row: [WeightedItem],
+        in remaining: inout CGRect,
+        output: inout [TreemapCell]
+    ) {
+        guard !row.isEmpty else { return }
+        let rowArea = row.reduce(CGFloat(0)) { $0 + $1.area }
+
+        if remaining.width >= remaining.height {
+            let stripWidth = remaining.height > 0 ? rowArea / remaining.height : 0
+            var y = remaining.minY
+
+            for (index, item) in row.enumerated() {
+                let height: CGFloat
+                if index == row.count - 1 {
+                    height = remaining.maxY - y
+                } else {
+                    height = stripWidth > 0 ? item.area / stripWidth : 0
+                }
+
+                let rect = CGRect(
+                    x: remaining.minX,
+                    y: y,
+                    width: max(0, stripWidth),
+                    height: max(0, height)
+                )
+                output.append(TreemapCell(nodeID: item.nodeID, rect: rect))
+                y += height
+            }
+
+            remaining = CGRect(
+                x: remaining.minX + stripWidth,
+                y: remaining.minY,
+                width: max(0, remaining.width - stripWidth),
+                height: remaining.height
+            )
         } else {
-            let firstHeight = rect.height * fraction
-            layout(ids: first, in: CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: firstHeight))
-            layout(ids: second, in: CGRect(x: rect.minX, y: rect.minY + firstHeight, width: rect.width, height: rect.height - firstHeight))
+            let stripHeight = remaining.width > 0 ? rowArea / remaining.width : 0
+            var x = remaining.minX
+
+            for (index, item) in row.enumerated() {
+                let width: CGFloat
+                if index == row.count - 1 {
+                    width = remaining.maxX - x
+                } else {
+                    width = stripHeight > 0 ? item.area / stripHeight : 0
+                }
+
+                let rect = CGRect(
+                    x: x,
+                    y: remaining.minY,
+                    width: max(0, width),
+                    height: max(0, stripHeight)
+                )
+                output.append(TreemapCell(nodeID: item.nodeID, rect: rect))
+                x += width
+            }
+
+            remaining = CGRect(
+                x: remaining.minX,
+                y: remaining.minY + stripHeight,
+                width: remaining.width,
+                height: max(0, remaining.height - stripHeight)
+            )
         }
     }
 }
@@ -904,42 +959,81 @@ private struct TreemapView: View {
             Divider()
 
             GeometryReader { proxy in
-                let cells = makeCells(size: proxy.size)
+                let canvasSize = CGSize(
+                    width: max(1, proxy.size.width),
+                    height: max(1, proxy.size.height)
+                )
+                let cells = makeCells(size: canvasSize)
 
                 ZStack(alignment: .topLeading) {
-                    Color(nsColor: .windowBackgroundColor)
+                    Canvas { context, size in
+                        let drawingBounds = CGRect(origin: .zero, size: size)
+                        context.fill(Path(drawingBounds), with: .color(Color(nsColor: .windowBackgroundColor)))
 
-                    ForEach(cells) { cell in
-                        if nodes.indices.contains(cell.nodeID) {
+                        for cell in cells {
+                            guard nodes.indices.contains(cell.nodeID) else { continue }
                             let node = nodes[cell.nodeID]
-                            TreemapTile(
-                                node: node,
-                                rect: cell.rect,
-                                color: tileColor(node: node),
-                                isSelected: selectedID == node.id,
-                                onSelect: { selectedID = node.id },
-                                onOpen: {
-                                    if node.isDirectory && !node.children.isEmpty {
-                                        focusID = node.id
-                                        selectedID = node.id
-                                        hoverState = nil
-                                    }
-                                },
-                                onHover: { localPoint in
-                                    hoverState = HoverState(
-                                        nodeID: node.id,
-                                        point: CGPoint(
-                                            x: cell.rect.minX + localPoint.x,
-                                            y: cell.rect.minY + localPoint.y
-                                        )
-                                    )
-                                },
-                                onHoverEnded: {
-                                    if hoverState?.nodeID == node.id {
-                                        hoverState = nil
-                                    }
-                                }
+                            let rect = cell.rect.integral.insetBy(dx: 0.5, dy: 0.5)
+                            guard rect.width > 0.5, rect.height > 0.5 else { continue }
+
+                            let color = tileColor(node: node)
+                            context.fill(Path(rect), with: .color(color.opacity(0.84)))
+
+                            let strokeColor = selectedID == node.id
+                                ? Color.white
+                                : Color.black.opacity(0.42)
+                            context.stroke(
+                                Path(rect),
+                                with: .color(strokeColor),
+                                lineWidth: selectedID == node.id ? 2.4 : 0.8
                             )
+
+                            if rect.width > 74 && rect.height > 35 {
+                                let title = Text(node.name)
+                                    .font(rect.width > 165 && rect.height > 72 ? .callout.weight(.semibold) : .caption.weight(.semibold))
+                                    .foregroundStyle(Color.white)
+                                context.draw(
+                                    title,
+                                    at: CGPoint(x: rect.minX + 6, y: rect.minY + 5),
+                                    anchor: .topLeading
+                                )
+
+                                if rect.width > 90 && rect.height > 54 {
+                                    let subtitle = Text(formatBytes(node.allocatedSize))
+                                        .font(.caption2)
+                                        .foregroundStyle(Color.white.opacity(0.9))
+                                    context.draw(
+                                        subtitle,
+                                        at: CGPoint(x: rect.minX + 6, y: rect.minY + 23),
+                                        anchor: .topLeading
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let point):
+                            updateHover(point: point, cells: cells)
+                        case .ended:
+                            hoverState = nil
+                        }
+                    }
+                    .onTapGesture {
+                        if let id = hoverState?.nodeID {
+                            selectedID = id
+                        }
+                    }
+                    .onTapGesture(count: 2) {
+                        guard let id = hoverState?.nodeID,
+                              nodes.indices.contains(id) else { return }
+                        let node = nodes[id]
+                        if node.isDirectory && !node.children.isEmpty {
+                            focusID = id
+                            selectedID = id
+                            hoverState = nil
                         }
                     }
 
@@ -948,12 +1042,14 @@ private struct TreemapView: View {
                         hoverCard(
                             node: nodes[hoverState.nodeID],
                             point: hoverState.point,
-                            containerSize: proxy.size
+                            containerSize: canvasSize
                         )
                     }
                 }
+                .frame(width: canvasSize.width, height: canvasSize.height)
                 .clipped()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1017,8 +1113,19 @@ private struct TreemapView: View {
         }
         guard !ids.isEmpty else { return [] }
 
-        var engine = StableTreemapLayout(nodes: nodes)
-        return engine.build(ids: ids, in: CGRect(origin: .zero, size: size))
+        let engine = SquarifiedTreemapLayout(nodes: nodes)
+        return engine.build(
+            ids: ids,
+            in: CGRect(x: 0, y: 0, width: size.width, height: size.height)
+        )
+    }
+
+    private func updateHover(point: CGPoint, cells: [TreemapCell]) {
+        if let cell = cells.first(where: { $0.rect.contains(point) }) {
+            hoverState = HoverState(nodeID: cell.nodeID, point: point)
+        } else {
+            hoverState = nil
+        }
     }
 
     private func tileColor(node: FileNode) -> Color {
@@ -1035,11 +1142,19 @@ private struct TreemapView: View {
 
     @ViewBuilder
     private func hoverCard(node: FileNode, point: CGPoint, containerSize: CGSize) -> some View {
-        let cardWidth: CGFloat = 310
-        let cardHeight: CGFloat = 78
-        let x = min(max(point.x + cardWidth / 2 + 14, cardWidth / 2 + 8), containerSize.width - cardWidth / 2 - 8)
+        let cardWidth: CGFloat = 320
+        let cardHeight: CGFloat = 82
+        let xCandidate = point.x + cardWidth / 2 + 16
+        let x = min(
+            max(xCandidate, cardWidth / 2 + 8),
+            max(cardWidth / 2 + 8, containerSize.width - cardWidth / 2 - 8)
+        )
+
         let yCandidate = point.y - cardHeight / 2 - 14
-        let y = min(max(yCandidate, cardHeight / 2 + 8), containerSize.height - cardHeight / 2 - 8)
+        let y = min(
+            max(yCandidate, cardHeight / 2 + 8),
+            max(cardHeight / 2 + 8, containerSize.height - cardHeight / 2 - 8)
+        )
 
         VStack(alignment: .leading, spacing: 3) {
             HStack {
@@ -1058,11 +1173,9 @@ private struct TreemapView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            if node.isDirectory {
-                Text("\(node.fileCount.formatted()) files")
-                    .font(.caption2)
-                    .foregroundStyle(Color.secondary)
-            }
+            Text(node.isDirectory ? "\(node.fileCount.formatted()) files" : "File")
+                .font(.caption2)
+                .foregroundStyle(Color.secondary)
         }
         .padding(9)
         .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
@@ -1074,55 +1187,6 @@ private struct TreemapView: View {
         .shadow(radius: 8)
         .position(x: x, y: y)
         .allowsHitTesting(false)
-    }
-}
-
-private struct TreemapTile: View {
-    let node: FileNode
-    let rect: CGRect
-    let color: Color
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onOpen: () -> Void
-    let onHover: (CGPoint) -> Void
-    let onHoverEnded: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Rectangle()
-                .fill(color.opacity(0.82))
-
-            Rectangle()
-                .stroke(isSelected ? Color.white : Color.black.opacity(0.38), lineWidth: isSelected ? 2.5 : 0.8)
-
-            if rect.width > 70 && rect.height > 34 {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(node.name)
-                        .font(rect.width > 160 && rect.height > 70 ? .callout.weight(.semibold) : .caption.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text(formatBytes(node.allocatedSize))
-                        .font(.caption2)
-                        .monospacedDigit()
-                }
-                .foregroundStyle(Color.white)
-                .shadow(radius: 1)
-                .padding(5)
-            }
-        }
-        .frame(width: max(1, rect.width), height: max(1, rect.height))
-        .position(x: rect.midX, y: rect.midY)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onOpen)
-        .onTapGesture(perform: onSelect)
-        .onContinuousHover { phase in
-            switch phase {
-            case .active(let location):
-                onHover(location)
-            case .ended:
-                onHoverEnded()
-            }
-        }
     }
 }
 
