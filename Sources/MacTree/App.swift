@@ -6,9 +6,9 @@ struct MacTreeApp: App {
     var body: some Scene {
         WindowGroup {
             MainView()
-                .frame(minWidth: 1120, minHeight: 720)
+                .frame(minWidth: 1220, minHeight: 720)
         }
-        .defaultSize(width: 1380, height: 860)
+        .defaultSize(width: 1460, height: 880)
     }
 }
 
@@ -26,15 +26,25 @@ struct MainView: View {
             Divider()
 
             VSplitView {
-                MTTreePane(
-                    nodes: controller.nodes,
-                    rootID: controller.rootID,
-                    totalAllocated: controller.allocated,
-                    scanVersion: controller.scanVersion,
-                    searchModel: controller.search,
-                    selectedID: $selectedID,
-                    hoveredID: $hoveredID
-                )
+                HSplitView {
+                    MTTreePane(
+                        nodes: controller.nodes,
+                        rootID: controller.rootID,
+                        totalAllocated: controller.allocated,
+                        scanVersion: controller.scanVersion,
+                        searchModel: controller.search,
+                        selectedID: $selectedID,
+                        hoveredID: $hoveredID
+                    )
+                    .frame(minWidth: 690, idealWidth: 900)
+
+                    MTExtensionPane(
+                        nodes: controller.nodes,
+                        scanVersion: controller.scanVersion,
+                        totalAllocated: controller.allocated
+                    )
+                    .frame(minWidth: 430, idealWidth: 540)
+                }
                 .frame(minHeight: 290)
 
                 MTTreemap(
