@@ -51,6 +51,15 @@ private struct MTRenderModel {
         }
         return nil
     }
+
+    func headerHitTest(_ point: CGPoint) -> Int? {
+        guard point.x.isFinite, point.y.isFinite else { return nil }
+        for index in frames.indices.reversed() {
+            guard let header = frames[index].headerRect, mtRectFinite(header) else { continue }
+            if header.contains(point) { return index }
+        }
+        return nil
+    }
 }
 
 private struct MTWeightedEntry {
@@ -308,7 +317,7 @@ struct MTTreemap: View {
                     Text(mtBytes(nodes[rootID].allocatedSize)).font(.caption).foregroundStyle(Color.secondary).monospacedDigit()
                 }
                 Spacer()
-                Text("Hierarchy view • right-click for actions")
+                Text("Hierarchy view • folder headers select whole folders • right-click for actions")
                     .font(.caption2).foregroundStyle(Color.secondary)
             }
             .padding(.horizontal, 9).padding(.vertical, 4)
@@ -552,6 +561,7 @@ private struct MTSurface: View {
     @Binding var hoveredID: Int?
 
     @State private var hoveredCellIndex: Int?
+    @State private var hoveredFrameIndex: Int?
     @State private var hoverAnchor: CGPoint = .zero
     @State private var localHoveredNodeID: Int?
     @State private var hoverPublishTask: Task<Void, Never>?
@@ -570,16 +580,28 @@ private struct MTSurface: View {
                     .onContinuousHover { phase in
                         switch phase {
                         case .active(let point):
-                            let hit = model.hitTest(point)
-                            if hit != hoveredCellIndex {
-                                hoveredCellIndex = hit
-                                hoverAnchor = point
-                                let id = hit.flatMap { model.cells.indices.contains($0) ? model.cells[$0].nodeID : nil }
-                                localHoveredNodeID = id
-                                publishHover(id)
+                            hoverAnchor = point
+                            if let frameIndex = model.headerHitTest(point), model.frames.indices.contains(frameIndex) {
+                                if hoveredFrameIndex != frameIndex || hoveredCellIndex != nil {
+                                    hoveredFrameIndex = frameIndex
+                                    hoveredCellIndex = nil
+                                    let id = model.frames[frameIndex].nodeID
+                                    localHoveredNodeID = id
+                                    publishHover(id)
+                                }
+                            } else {
+                                let hit = model.hitTest(point)
+                                if hit != hoveredCellIndex || hoveredFrameIndex != nil {
+                                    hoveredFrameIndex = nil
+                                    hoveredCellIndex = hit
+                                    let id = hit.flatMap { model.cells.indices.contains($0) ? model.cells[$0].nodeID : nil }
+                                    localHoveredNodeID = id
+                                    publishHover(id)
+                                }
                             }
                         case .ended:
                             hoveredCellIndex = nil
+                            hoveredFrameIndex = nil
                             localHoveredNodeID = nil
                             publishHover(nil)
                         }
@@ -593,7 +615,10 @@ private struct MTSurface: View {
                         }
                     }
 
-                if let index = hoveredCellIndex, model.cells.indices.contains(index) {
+                if let frameIndex = hoveredFrameIndex, model.frames.indices.contains(frameIndex) {
+                    folderHoverCard(model.frames[frameIndex], proxy.size)
+                        .allowsHitTesting(false)
+                } else if let index = hoveredCellIndex, model.cells.indices.contains(index) {
                     hoverCard(model.cells[index], proxy.size)
                         .allowsHitTesting(false)
                 }
@@ -608,20 +633,23 @@ private struct MTSurface: View {
     private var selectionOverlay: some View {
         Canvas { context, _ in
             if let selectedID {
-                drawHighlight(id: selectedID, color: Color.white, width: 2.4, context: &context)
+                drawHighlight(id: selectedID, color: Color.white, width: 2.4, fillOpacity: 0.075, context: &context)
             }
             if let localHoveredNodeID, localHoveredNodeID != selectedID {
-                drawHighlight(id: localHoveredNodeID, color: Color.accentColor, width: 1.7, context: &context)
+                drawHighlight(id: localHoveredNodeID, color: Color.accentColor, width: 1.7, fillOpacity: 0.055, context: &context)
             }
         }
     }
 
-    private func drawHighlight(id: Int, color: Color, width: CGFloat, context: inout GraphicsContext) {
-        for cell in model.cells where cell.nodeID == id {
-            context.stroke(Path(cell.rect), with: .color(color), lineWidth: width)
-        }
+    private func drawHighlight(id: Int, color: Color, width: CGFloat, fillOpacity: Double,
+                               context: inout GraphicsContext) {
         for frame in model.frames where frame.nodeID == id {
+            context.fill(Path(frame.rect), with: .color(color.opacity(fillOpacity)))
             context.stroke(Path(frame.rect), with: .color(color), lineWidth: width)
+        }
+        for cell in model.cells where cell.nodeID == id {
+            context.fill(Path(cell.rect), with: .color(color.opacity(fillOpacity * 0.7)))
+            context.stroke(Path(cell.rect), with: .color(color), lineWidth: width)
         }
     }
 
@@ -638,8 +666,31 @@ private struct MTSurface: View {
         }
     }
 
+    private func folderHoverCard(_ frame: MTFrame, _ size: CGSize) -> some View {
+        let node = nodes[frame.nodeID]
+        return infoCard(title: node.name,
+                        node: node,
+                        category: mtBestCategory(frame.nodeID, nodes),
+                        allocated: node.allocatedSize,
+                        files: node.fileCount,
+                        typeLabel: "Folder",
+                        size: size)
+    }
+
     private func hoverCard(_ cell: MTCell, _ size: CGSize) -> some View {
         let node = nodes[cell.nodeID]
+        return infoCard(title: cell.label,
+                        node: node,
+                        category: cell.category,
+                        allocated: cell.representedAllocated,
+                        files: cell.representedFiles,
+                        typeLabel: node.isDirectory ? (cell.label.contains("items") ? "Grouped" : "Folder") : mtFileTypeLabel(node),
+                        size: size)
+    }
+
+    private func infoCard(title: String, node: MTNode, category: MTCategory,
+                          allocated: UInt64, files: UInt64, typeLabel: String,
+                          size: CGSize) -> some View {
         let cardWidth: CGFloat = 430
         let cardHeight: CGFloat = 150
         let x = hoverAnchor.x + 18 + cardWidth <= size.width - 8
@@ -650,17 +701,17 @@ private struct MTSurface: View {
         return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Image(systemName: node.isDirectory ? "folder.fill" : "doc.fill")
-                    .foregroundStyle(node.isDirectory ? Color.blue : cell.category.color)
-                Text(cell.label).font(.callout.weight(.bold)).lineLimit(1)
+                    .foregroundStyle(node.isDirectory ? Color.blue : category.color)
+                Text(title).font(.callout.weight(.bold)).lineLimit(1)
                 Spacer()
-                RoundedRectangle(cornerRadius: 2).fill(cell.category.color).frame(width: 10, height: 10)
-                Text(cell.category.rawValue).font(.caption.weight(.semibold))
+                RoundedRectangle(cornerRadius: 2).fill(category.color).frame(width: 10, height: 10)
+                Text(category.rawValue).font(.caption.weight(.semibold))
             }
             HStack(spacing: 16) {
-                info("Allocated", mtBytes(cell.representedAllocated))
+                info("Allocated", mtBytes(allocated))
                 info("Logical", mtBytes(node.logicalSize))
-                info("Files", cell.representedFiles.formatted())
-                info("Type", node.isDirectory ? (cell.label.contains("items") ? "Grouped" : "Folder") : mtFileTypeLabel(node))
+                info("Files", files.formatted())
+                info("Type", typeLabel)
             }
             .font(.caption2)
             Text(node.path)
