@@ -243,6 +243,7 @@ struct MainView: View {
                         selectedID: $selectedID,
                         hoveredID: $hoveredID
                     )
+                    .id("tree-\(language)-\(controller.scanVersion)")
                     .frame(minWidth: 520, idealWidth: 820, maxWidth: .infinity)
                     .clipped()
 
@@ -251,6 +252,7 @@ struct MainView: View {
                         scanVersion: controller.scanVersion,
                         totalAllocated: controller.allocated
                     )
+                    .id("extensions-\(language)-\(controller.scanVersion)")
                     .frame(minWidth: 360, idealWidth: 520, maxWidth: .infinity)
                     .clipped()
                 }
@@ -265,14 +267,13 @@ struct MainView: View {
                     selectedID: $selectedID,
                     hoveredID: $hoveredID
                 )
+                .id("treemap-\(language)-\(controller.scanVersion)")
                 .frame(minHeight: 320)
             }
 
             Divider()
             status
         }
-        // Reading these values here makes every visible pane refresh its labels
-        // without recreating the scanner/controller or losing the current scan.
         .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
         .onChange(of: controller.scanVersion) { _, _ in
             selectedID = nil
