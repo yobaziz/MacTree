@@ -308,7 +308,7 @@ struct MTTreemap: View {
                     Text(mtBytes(nodes[rootID].allocatedSize)).font(.caption).foregroundStyle(Color.secondary).monospacedDigit()
                 }
                 Spacer()
-                Text("Linked selection • right-click for actions")
+                Text("Hierarchy view • right-click for actions")
                     .font(.caption2).foregroundStyle(Color.secondary)
             }
             .padding(.horizontal, 9).padding(.vertical, 4)
@@ -320,7 +320,46 @@ struct MTTreemap: View {
 
             MTTreemapViewport(nodes: nodes, rootID: rootID,
                               selectedID: $selectedID, hoveredID: $hoveredID)
+
+            Divider()
+            selectionPathBar
         }
+    }
+
+    private var selectionPathBar: some View {
+        let activeID = hoveredID ?? selectedID
+        return HStack(spacing: 7) {
+            if let activeID, nodes.indices.contains(activeID) {
+                let node = nodes[activeID]
+                Image(systemName: node.isDirectory ? "folder.fill" : "doc.fill")
+                    .foregroundStyle(node.isDirectory ? Color.blue : Color.secondary)
+                Text(node.path)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text(mtBytes(node.allocatedSize))
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                Text("•")
+                    .foregroundStyle(Color.secondary)
+                Text("\(node.fileCount.formatted()) files")
+                    .font(.caption2)
+                    .foregroundStyle(Color.secondary)
+            } else {
+                Image(systemName: "scope")
+                    .foregroundStyle(Color.secondary)
+                Text(rootPath)
+                    .font(.caption2)
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
     }
 
     private var legend: some View {
@@ -399,7 +438,7 @@ private struct MTDiskCapacityBar: View {
                 segment(width: scannedW, color: Color.accentColor.opacity(0.78),
                         title: "Scanned", value: mtBytes(safeScanned))
                 segment(width: otherW, color: Color.secondary.opacity(0.42),
-                        title: "Other Used", value: mtBytes(otherUsed))
+                        title: "Unscanned / Other Used", value: mtBytes(otherUsed))
                 segment(width: freeW, color: Color.green.opacity(0.48),
                         title: "Free Space", value: mtBytes(free))
             }
@@ -410,6 +449,7 @@ private struct MTDiskCapacityBar: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.62))
+        .help("Disk capacity: mapped selection, used-but-unmapped space, and free space")
     }
 
     @ViewBuilder
@@ -467,7 +507,11 @@ private struct MTBaseCanvas: View, Equatable {
                                  at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 2.5),
                                  anchor: .topLeading)
                     if cell.rect.width > 105 && cell.rect.height > 43 {
-                        let sub = Text(mtBytes(cell.representedAllocated))
+                        let sizeText = mtBytes(cell.representedAllocated)
+                        let details = cell.representedFiles > 1
+                            ? "\(sizeText) • \(cell.representedFiles.formatted()) files"
+                            : sizeText
+                        let sub = Text(details)
                             .font(.system(size: 7.5))
                             .foregroundStyle(Color.white.opacity(0.82))
                         context.draw(sub,
@@ -482,8 +526,10 @@ private struct MTBaseCanvas: View, Equatable {
                 if let header = frame.headerRect, mtRectFinite(header) {
                     context.fill(Path(header),
                                  with: .color(Color.black.opacity(frame.depth == 0 ? 0.48 : 0.34)))
-                    let maxChars = max(5, Int(header.width / 6.0))
-                    let label = Text(mtEllipsize(nodes[frame.nodeID].name, maxCharacters: maxChars))
+                    let node = nodes[frame.nodeID]
+                    let fullLabel = "\(node.name) (\(mtBytes(node.allocatedSize)))"
+                    let maxChars = max(5, Int(header.width / 5.7))
+                    let label = Text(mtEllipsize(fullLabel, maxCharacters: maxChars))
                         .font(.system(size: frame.depth <= 1 ? 8.5 : 8, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(0.94))
                     context.draw(label,
