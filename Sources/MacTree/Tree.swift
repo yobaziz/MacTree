@@ -36,24 +36,18 @@ final class MTVisibleTreeModel: ObservableObject {
 
     func toggle(_ id: Int) {
         guard nodes.indices.contains(id), nodes[id].isDirectory else { return }
-        if expanded.contains(id) {
-            collapse(id)
-        } else {
-            expand(id)
-        }
+        if expanded.contains(id) { collapse(id) } else { expand(id) }
     }
 
     func reveal(_ id: Int) {
-        guard nodes.indices.contains(id) else { return }
+        guard nodes.indices.contains(id), !visibleIDs.contains(id) else { return }
         var chain: [Int] = []
         var current = nodes[id].parentID
         while let value = current, nodes.indices.contains(value), value != rootID {
             chain.append(value)
             current = nodes[value].parentID
         }
-        for ancestor in chain.reversed() {
-            expanded.insert(ancestor)
-        }
+        for ancestor in chain.reversed() { expanded.insert(ancestor) }
         rebuild()
     }
 
@@ -75,8 +69,10 @@ final class MTVisibleTreeModel: ObservableObject {
             return MTVisibleRow(id: child, depth: depth)
         }
         guard !children.isEmpty else { return }
+
         expanded.insert(id)
         rows.insert(contentsOf: children, at: rowIndex + 1)
+        visibleIDs.reserveCapacity(visibleIDs.count + children.count)
         for child in children { visibleIDs.insert(child.id) }
     }
 
@@ -90,9 +86,7 @@ final class MTVisibleTreeModel: ObservableObject {
             end += 1
         }
         expanded.remove(id)
-        if end > rowIndex + 1 {
-            rows.removeSubrange((rowIndex + 1)..<end)
-        }
+        if end > rowIndex + 1 { rows.removeSubrange((rowIndex + 1)..<end) }
     }
 
     private func rebuild() {
@@ -101,6 +95,7 @@ final class MTVisibleTreeModel: ObservableObject {
             refreshVisibleIDs()
             return
         }
+
         func appendChildren(_ parent: Int, depth: Int) {
             guard nodes.indices.contains(parent) else { return }
             for child in nodes[parent].children where nodes.indices.contains(child) {
@@ -128,20 +123,14 @@ struct MTFileContextMenu: View {
             Button("Show in Finder") { MTFileActions.reveal(node) }
             Button("Open Containing Folder") { MTFileActions.openContainingFolder(node) }
             Button("Get Info") { MTFileActions.getInfo(node) }
-
             Divider()
-
             Button("Copy Path") { MTFileActions.copyPath(node) }
             Button("Copy Name") { MTFileActions.copyName(node) }
             Button(node.isDirectory ? "Open in Terminal" : "Open Folder in Terminal") {
                 MTFileActions.openTerminal(node)
             }
-
             Divider()
-
-            Button("Move to Trash", role: .destructive) {
-                MTFileActions.moveToTrash(node)
-            }
+            Button("Move to Trash", role: .destructive) { MTFileActions.moveToTrash(node) }
         }
     }
 }
@@ -156,6 +145,8 @@ struct MTTreePane: View {
     @Binding var hoveredID: Int?
 
     @StateObject private var model = MTVisibleTreeModel()
+    @State private var localHoveredID: Int?
+    @State private var hoverPublishTask: Task<Void, Never>?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -174,20 +165,13 @@ struct MTTreePane: View {
                                     isHovered: visibleHoverID == node.id,
                                     toggle: { model.toggle(node.id) },
                                     select: { selectedID = node.id },
-                                    hover: { inside in
-                                        if inside {
-                                            hoveredID = node.id
-                                        } else if hoveredID == node.id {
-                                            hoveredID = nil
-                                        }
-                                    },
+                                    hover: { inside in handleHover(node.id, inside: inside) },
                                     open: {
                                         selectedID = node.id
-                                        if node.isDirectory && !node.children.isEmpty {
-                                            model.toggle(node.id)
-                                        }
+                                        if node.isDirectory && !node.children.isEmpty { model.toggle(node.id) }
                                     }
                                 )
+                                .equatable()
                                 .id(node.id)
                             }
                         }
@@ -210,21 +194,16 @@ struct MTTreePane: View {
                 .frame(minWidth: 1280, alignment: .topLeading)
             }
             .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
-            .onAppear {
-                model.sync(nodes: nodes, rootID: rootID, version: scanVersion)
-            }
+            .onAppear { model.sync(nodes: nodes, rootID: rootID, version: scanVersion) }
             .onChange(of: scanVersion) { _, value in
                 model.sync(nodes: nodes, rootID: rootID, version: value)
             }
             .onChange(of: selectedID) { _, newID in
                 guard searchModel.query.isEmpty, let newID else { return }
                 model.reveal(newID)
-                DispatchQueue.main.async {
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        proxy.scrollTo(newID, anchor: .center)
-                    }
-                }
+                DispatchQueue.main.async { proxy.scrollTo(newID, anchor: .center) }
             }
+            .onDisappear { hoverPublishTask?.cancel() }
         }
     }
 
@@ -236,11 +215,35 @@ struct MTTreePane: View {
     }
 
     private var visibleHoverID: Int? {
+        let effective = localHoveredID ?? hoveredID
         if !searchModel.query.isEmpty {
-            guard let hoveredID, searchModel.resultIDs.contains(hoveredID) else { return nil }
-            return hoveredID
+            guard let effective, searchModel.resultIDs.contains(effective) else { return nil }
+            return effective
         }
-        return model.nearestVisibleAncestor(hoveredID)
+        return model.nearestVisibleAncestor(effective)
+    }
+
+    private func handleHover(_ id: Int, inside: Bool) {
+        if inside {
+            localHoveredID = id
+            publishHover(id)
+        } else if localHoveredID == id {
+            localHoveredID = nil
+            publishHover(nil)
+        }
+    }
+
+    private func publishHover(_ id: Int?) {
+        hoverPublishTask?.cancel()
+        guard let id else {
+            hoveredID = nil
+            return
+        }
+        hoverPublishTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 35_000_000)
+            guard !Task.isCancelled else { return }
+            hoveredID = id
+        }
     }
 
     private func header(_ text: String, _ width: CGFloat, _ alignment: Alignment) -> some View {
@@ -248,7 +251,7 @@ struct MTTreePane: View {
     }
 }
 
-private struct MTTreeRow: View {
+private struct MTTreeRow: View, Equatable {
     let node: MTNode
     let depth: Int
     let total: UInt64
@@ -259,6 +262,20 @@ private struct MTTreeRow: View {
     let select: () -> Void
     let hover: (Bool) -> Void
     let open: () -> Void
+
+    static func == (lhs: MTTreeRow, rhs: MTTreeRow) -> Bool {
+        lhs.node.id == rhs.node.id &&
+        lhs.node.name == rhs.node.name &&
+        lhs.node.logicalSize == rhs.node.logicalSize &&
+        lhs.node.allocatedSize == rhs.node.allocatedSize &&
+        lhs.node.fileCount == rhs.node.fileCount &&
+        lhs.node.modifiedTime == rhs.node.modifiedTime &&
+        lhs.depth == rhs.depth &&
+        lhs.total == rhs.total &&
+        lhs.isExpanded == rhs.isExpanded &&
+        lhs.isSelected == rhs.isSelected &&
+        lhs.isHovered == rhs.isHovered
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -279,9 +296,7 @@ private struct MTTreeRow: View {
                     .foregroundStyle(node.isDirectory ? Color.blue : Color.secondary)
                     .frame(width: 17)
 
-                Text(node.name)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                Text(node.name).lineLimit(1).truncationMode(.middle)
             }
             .frame(width: 330, alignment: .leading)
             .padding(.horizontal, 6)
