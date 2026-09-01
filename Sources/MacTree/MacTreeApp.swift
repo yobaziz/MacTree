@@ -73,20 +73,28 @@ actor DiskScanner {
         let rootPath = root.standardizedFileURL.path
         let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
 
-        for case let url as URL in enumerator {
+        while let url = enumerator.nextObject() as? URL {
             if Task.isCancelled { break }
 
             do {
                 let values = try url.resourceValues(forKeys: keys)
                 if values.isSymbolicLink == true { continue }
 
-                let relative = url.standardizedFileURL.path.replacingOccurrences(of: prefix, with: "")
+                let fullPath = url.standardizedFileURL.path
+                let relative: String
+                if fullPath.hasPrefix(prefix) {
+                    relative = String(fullPath.dropFirst(prefix.count))
+                } else {
+                    relative = fullPath
+                }
+
                 guard let first = relative.split(separator: "/").first, !first.isEmpty else { continue }
-                let topURL = root.appendingPathComponent(String(first))
+                let firstName = String(first)
+                let topURL = root.appendingPathComponent(firstName)
                 var agg = topLevel[topURL, default: Aggregate()]
 
                 let isDirectory = values.isDirectory == true
-                if relative == String(first) {
+                if relative == firstName {
                     agg.isDirectory = isDirectory
                     agg.modifiedAt = values.contentModificationDate
                 }
@@ -109,19 +117,40 @@ actor DiskScanner {
 
             publishCounter += 1
             if publishCounter >= 2500 || Date().timeIntervalSince(lastPublish) >= 0.25 {
-                let snapshot = makeSnapshot(topLevel: topLevel, files: filesScanned, logical: logicalBytes, allocated: allocatedBytes, denied: denied, start: start)
+                let snapshot = makeSnapshot(
+                    topLevel: topLevel,
+                    files: filesScanned,
+                    logical: logicalBytes,
+                    allocated: allocatedBytes,
+                    denied: denied,
+                    start: start
+                )
                 await progress(snapshot)
                 publishCounter = 0
                 lastPublish = Date()
             }
         }
 
-        let final = makeSnapshot(topLevel: topLevel, files: filesScanned, logical: logicalBytes, allocated: allocatedBytes, denied: denied, start: start)
+        let final = makeSnapshot(
+            topLevel: topLevel,
+            files: filesScanned,
+            logical: logicalBytes,
+            allocated: allocatedBytes,
+            denied: denied,
+            start: start
+        )
         await progress(final)
         return final
     }
 
-    private func makeSnapshot(topLevel: [URL: Aggregate], files: UInt64, logical: UInt64, allocated: UInt64, denied: UInt64, start: Date) -> ScanSnapshot {
+    private func makeSnapshot(
+        topLevel: [URL: Aggregate],
+        files: UInt64,
+        logical: UInt64,
+        allocated: UInt64,
+        denied: UInt64,
+        start: Date
+    ) -> ScanSnapshot {
         let items = topLevel.map { url, agg in
             FileNode(
                 url: url,
@@ -138,7 +167,14 @@ actor DiskScanner {
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
 
-        return ScanSnapshot(items: items, filesScanned: files, logicalBytes: logical, allocatedBytes: allocated, denied: denied, elapsed: Date().timeIntervalSince(start))
+        return ScanSnapshot(
+            items: items,
+            filesScanned: files,
+            logicalBytes: logical,
+            allocatedBytes: allocated,
+            denied: denied,
+            elapsed: Date().timeIntervalSince(start)
+        )
     }
 }
 
@@ -163,7 +199,9 @@ final class ScanController: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { rootURL = url }
+        if panel.runModal() == .OK, let url = panel.url {
+            rootURL = url
+        }
     }
 
     func start() {
@@ -192,7 +230,9 @@ final class ScanController: ObservableObject {
                     }
                 }
             } catch {
-                if !Task.isCancelled { self.errorMessage = error.localizedDescription }
+                if !Task.isCancelled {
+                    self.errorMessage = error.localizedDescription
+                }
             }
             self.isScanning = false
         }
@@ -230,26 +270,42 @@ struct MainView: View {
                     TableColumn("Name") { node in
                         HStack(spacing: 6) {
                             Image(systemName: node.isDirectory ? "folder.fill" : "doc.fill")
-                                .foregroundStyle(node.isDirectory ? .blue : .secondary)
+                                .foregroundStyle(node.isDirectory ? Color.blue : Color.secondary)
                             Text(node.name).lineLimit(1)
                         }
-                    }.width(min: 180, ideal: 250)
+                    }
+                    .width(min: 180, ideal: 250)
 
-                    TableColumn("Size") { node in Text(formatBytes(node.logicalSize)).monospacedDigit() }
-                        .width(min: 90, ideal: 110)
-                    TableColumn("Allocated") { node in Text(formatBytes(node.allocatedSize)).monospacedDigit() }
-                        .width(min: 90, ideal: 110)
-                    TableColumn("Files") { node in Text(node.fileCount.formatted()).monospacedDigit() }
-                        .width(min: 70, ideal: 90)
+                    TableColumn("Size") { node in
+                        Text(formatBytes(node.logicalSize)).monospacedDigit()
+                    }
+                    .width(min: 90, ideal: 110)
+
+                    TableColumn("Allocated") { node in
+                        Text(formatBytes(node.allocatedSize)).monospacedDigit()
+                    }
+                    .width(min: 90, ideal: 110)
+
+                    TableColumn("Files") { node in
+                        Text(node.fileCount.formatted()).monospacedDigit()
+                    }
+                    .width(min: 70, ideal: 90)
+
                     TableColumn("% Disk") { node in
                         let ratio = Double(node.allocatedSize) / Double(max(controller.allocatedBytes, 1))
                         HStack(spacing: 5) {
                             ProgressView(value: ratio).frame(width: 50)
                             Text(ratio, format: .percent.precision(.fractionLength(1))).monospacedDigit()
                         }
-                    }.width(min: 105, ideal: 125)
-                    TableColumn("Path") { node in Text(node.url.path).foregroundStyle(.secondary).lineLimit(1) }
-                        .width(min: 250, ideal: 400)
+                    }
+                    .width(min: 105, ideal: 125)
+
+                    TableColumn("Path") { node in
+                        Text(node.url.path)
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(1)
+                    }
+                    .width(min: 250, ideal: 400)
                 }
                 .frame(minHeight: 300)
 
@@ -260,7 +316,13 @@ struct MainView: View {
             Divider()
             status
         }
-        .alert("MacTree", isPresented: Binding(get: { controller.errorMessage != nil }, set: { if !$0 { controller.errorMessage = nil } })) {
+        .alert(
+            "MacTree",
+            isPresented: Binding(
+                get: { controller.errorMessage != nil },
+                set: { if !$0 { controller.errorMessage = nil } }
+            )
+        ) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(controller.errorMessage ?? "")
@@ -270,20 +332,35 @@ struct MainView: View {
     private var toolbar: some View {
         HStack(spacing: 10) {
             Button(action: controller.chooseFolder) {
-                Label(controller.rootURL.lastPathComponent.isEmpty ? controller.rootURL.path : controller.rootURL.lastPathComponent, systemImage: "internaldrive")
-                    .frame(minWidth: 150, alignment: .leading)
+                Label(
+                    controller.rootURL.lastPathComponent.isEmpty
+                        ? controller.rootURL.path
+                        : controller.rootURL.lastPathComponent,
+                    systemImage: "internaldrive"
+                )
+                .frame(minWidth: 150, alignment: .leading)
             }
 
             if controller.isScanning {
                 Button("Stop", role: .destructive, action: controller.stop)
             } else {
-                Button("Scan", action: controller.start).buttonStyle(.borderedProminent)
+                Button("Scan", action: controller.start)
+                    .buttonStyle(.borderedProminent)
             }
 
             Spacer()
-            TextField("Search", text: $searchText).textFieldStyle(.roundedBorder).frame(width: 250)
-            Label(controller.isScanning ? "Scanning…" : "Ready", systemImage: controller.isScanning ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
-                .foregroundStyle(controller.isScanning ? .secondary : .green)
+
+            TextField("Search", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 250)
+
+            Label(
+                controller.isScanning ? "Scanning…" : "Ready",
+                systemImage: controller.isScanning
+                    ? "arrow.triangle.2.circlepath"
+                    : "checkmark.circle.fill"
+            )
+            .foregroundStyle(controller.isScanning ? Color.secondary : Color.green)
         }
         .padding(10)
     }
@@ -303,20 +380,34 @@ struct MainView: View {
 
     private func metric(_ title: String, _ value: String) -> some View {
         HStack(spacing: 4) {
-            Text("\(title):").foregroundStyle(.secondary)
-            Text(value).fontWeight(.semibold).monospacedDigit()
-        }.font(.callout)
+            Text("\(title):")
+                .foregroundStyle(Color.secondary)
+            Text(value)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+        }
+        .font(.callout)
     }
 
     private var status: some View {
         HStack {
-            if controller.isScanning { ProgressView().controlSize(.small) }
-            Text(controller.isScanning
-                 ? "Scanning \(controller.filesScanned.formatted()) files…"
-                 : "Scanned \(controller.filesScanned.formatted()) files in \(controller.elapsed.formatted(.number.precision(.fractionLength(1)))) s")
+            if controller.isScanning {
+                ProgressView().controlSize(.small)
+            }
+
+            Text(
+                controller.isScanning
+                    ? "Scanning \(controller.filesScanned.formatted()) files…"
+                    : "Scanned \(controller.filesScanned.formatted()) files in \(controller.elapsed.formatted(.number.precision(.fractionLength(1)))) s"
+            )
+
             Spacer()
-            if let selectedID, let selected = controller.items.first(where: { $0.id == selectedID }) {
-                Text("Selected: \(selected.url.path)").foregroundStyle(.secondary).lineLimit(1)
+
+            if let selectedID,
+               let selected = controller.items.first(where: { $0.id == selectedID }) {
+                Text("Selected: \(selected.url.path)")
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
             }
         }
         .font(.caption)
@@ -328,28 +419,42 @@ struct MainView: View {
 struct TreemapPrototype: View {
     let items: [FileNode]
 
+    private let colors: [Color] = [
+        .blue, .green, .purple, .red, .orange,
+        .teal, .pink, .indigo, .mint, .cyan
+    ]
+
     var body: some View {
         GeometryReader { proxy in
             let top = Array(items.prefix(10))
             let total = max(top.reduce(UInt64(0)) { $0 + $1.allocatedSize }, 1)
+
             HStack(spacing: 2) {
                 ForEach(Array(top.enumerated()), id: \.element.id) { index, node in
                     let ratio = Double(node.allocatedSize) / Double(total)
+
                     ZStack {
-                        Rectangle().fill(colors[index % colors.count].gradient)
+                        Rectangle()
+                            .fill(colors[index % colors.count].gradient)
+
                         VStack(spacing: 2) {
-                            Text(node.name).font(.headline).lineLimit(1)
-                            Text(formatBytes(node.allocatedSize)).font(.caption).monospacedDigit()
-                            Text(ratio, format: .percent.precision(.fractionLength(1))).font(.caption2)
+                            Text(node.name)
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text(formatBytes(node.allocatedSize))
+                                .font(.caption)
+                                .monospacedDigit()
+                            Text(ratio, format: .percent.precision(.fractionLength(1)))
+                                .font(.caption2)
                         }
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.white)
                         .padding(5)
                     }
                     .frame(width: max(2, proxy.size.width * ratio))
                     .clipped()
                 }
             }
-            .background(.black.opacity(0.08))
+            .background(Color.black.opacity(0.08))
         }
         .overlay(alignment: .topLeading) {
             Text("Treemap prototype")
@@ -359,13 +464,11 @@ struct TreemapPrototype: View {
                 .padding(8)
         }
     }
-
-    private let colors: [Color] = [.blue, .green, .purple, .red, .orange, .teal, .pink, .indigo, .mint, .cyan]
 }
 
 private func formatBytes(_ value: UInt64) -> String {
-    let f = ByteCountFormatter()
-    f.countStyle = .file
-    f.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
-    return f.string(fromByteCount: Int64(clamping: value))
+    let formatter = ByteCountFormatter()
+    formatter.countStyle = .file
+    formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
+    return formatter.string(fromByteCount: Int64(clamping: value))
 }
