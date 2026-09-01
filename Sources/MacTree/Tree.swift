@@ -500,7 +500,11 @@ private func mtFastExtensionKey(_ name: String) -> String {
 }
 
 private func mtExtensionDisplayName(_ key: String) -> String {
-    key == "(no extension)" ? mtL("No Extension") : key
+    key == "(no extension)" ? "—" : key
+}
+
+private func mtExtensionSelectionName(_ key: String) -> String {
+    key == "(no extension)" ? "\(mtL("Other")) \(mtL("Files"))" : key
 }
 
 private func mtExtensionCategory(_ key: String) -> MTCategory {
@@ -610,7 +614,7 @@ struct MTExtensionPane: View {
                 if let selectedExtension {
                     HStack(spacing: 5) {
                         Image(systemName: "scope")
-                        Text(mtExtensionDisplayName(selectedExtension)).fontWeight(.semibold)
+                        Text(mtExtensionSelectionName(selectedExtension)).fontWeight(.semibold)
                         Text(mtL("selected")).foregroundStyle(Color.secondary)
                         Spacer()
                         Button(mtL("Clear")) { self.selectedExtension = nil }
@@ -695,7 +699,7 @@ private struct MTExtensionRow: View {
         .font(.callout)
         .background(selected ? Color.accentColor.opacity(0.30) : Color.clear)
         .overlay(alignment: .bottom) { Divider().opacity(0.22) }
-        .help("\(mtExtensionDisplayName(stat.extensionKey)) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) \(mtL("Allocated").lowercased()) • \(stat.fileCount.formatted()) \(mtL("files"))")
+        .help("\(mtExtensionSelectionName(stat.extensionKey)) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) \(mtL("Allocated").lowercased()) • \(stat.fileCount.formatted()) \(mtL("files"))")
     }
 
     private func extensionCell(_ text: String, _ width: CGFloat, _ alignment: Alignment, monospaced: Bool = false) -> some View {
@@ -738,7 +742,7 @@ private struct MTExtensionRow: View {
         case "pdf": return mtL("PDF Document")
         case "txt", "md", "rtf": return mtL("Text Document")
         case "app": return mtL("Application")
-        case "": return key == "(no extension)" ? mtL("No Extension") : mtL("File")
+        case "": return key == "(no extension)" ? "\(mtL("Other")) \(mtL("Files"))" : mtL("File")
         default: return category == .other ? mtL("File") : mtL(category.rawValue)
         }
     }
