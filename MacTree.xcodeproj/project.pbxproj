@@ -11,6 +11,7 @@
 		A10000000000000000000002 /* Core.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* Core.swift */; };
 		A10000000000000000000003 /* Tree.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000013 /* Tree.swift */; };
 		A10000000000000000000004 /* Treemap.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* Treemap.swift */; };
+		A10000000000000000000005 /* FastScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* FastScanner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -18,6 +19,7 @@
 		A10000000000000000000012 /* Core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Core.swift; sourceTree = "<group>"; };
 		A10000000000000000000013 /* Tree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tree.swift; sourceTree = "<group>"; };
 		A10000000000000000000014 /* Treemap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Treemap.swift; sourceTree = "<group>"; };
+		A10000000000000000000016 /* FastScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastScanner.swift; sourceTree = "<group>"; };
 		A10000000000000000000015 /* MacTree.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacTree.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -45,6 +47,7 @@
 			children = (
 				A10000000000000000000011 /* App.swift */,
 				A10000000000000000000012 /* Core.swift */,
+				A10000000000000000000016 /* FastScanner.swift */,
 				A10000000000000000000013 /* Tree.swift */,
 				A10000000000000000000014 /* Treemap.swift */,
 			);
@@ -130,6 +133,7 @@
 			files = (
 				A10000000000000000000001 /* App.swift in Sources */,
 				A10000000000000000000002 /* Core.swift in Sources */,
+				A10000000000000000000005 /* FastScanner.swift in Sources */,
 				A10000000000000000000003 /* Tree.swift in Sources */,
 				A10000000000000000000004 /* Treemap.swift in Sources */,
 			);
