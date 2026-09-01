@@ -176,9 +176,7 @@ actor MTScanner {
             )
             builders[parentID].children.append(id)
 
-            if isDirectory {
-                directoryIDs[relative] = id
-            }
+            if isDirectory { directoryIDs[relative] = id }
 
             if publishCounter >= 30_000 {
                 await progress(
@@ -380,15 +378,9 @@ struct MainViewV4: View {
             Divider()
 
             VSplitView {
-                tree
-                    .frame(minHeight: 290)
-
-                FastTreemap(
-                    nodes: controller.nodes,
-                    rootID: controller.rootID,
-                    selectedID: $selectedID
-                )
-                .frame(minHeight: 320)
+                tree.frame(minHeight: 290)
+                StableTreemap(nodes: controller.nodes, rootID: controller.rootID, selectedID: $selectedID)
+                    .frame(minHeight: 320)
             }
 
             Divider()
@@ -667,9 +659,9 @@ private struct TreeRowV4: View {
     }
 }
 
-// MARK: - Fast readable treemap
+// MARK: - Stable treemap
 
-private struct DrawCell: Identifiable {
+private struct MTDrawCell: Identifiable {
     enum Kind { case file, aggregate }
     let id: Int
     let nodeID: Int
@@ -677,29 +669,37 @@ private struct DrawCell: Identifiable {
     let kind: Kind
 }
 
-private struct FolderFrame: Identifiable {
+private struct MTFolderFrame: Identifiable {
     let id: Int
     let nodeID: Int
     let rect: CGRect
     let depth: Int
 }
 
-private struct RenderModel {
-    let cells: [DrawCell]
-    let frames: [FolderFrame]
+private struct MTRenderModel {
+    let cells: [MTDrawCell]
+    let frames: [MTFolderFrame]
     let buckets: [[Int]]
-    let gridColumns: Int
-    let gridRows: Int
+    let cols: Int
+    let rows: Int
     let size: CGSize
 
     func hitTest(_ point: CGPoint) -> Int? {
-        guard point.x >= 0, point.y >= 0, point.x < size.width, point.y < size.height,
-              gridColumns > 0, gridRows > 0 else { return nil }
+        guard point.x.isFinite, point.y.isFinite,
+              point.x >= 0, point.y >= 0,
+              point.x < size.width, point.y < size.height,
+              cols > 0, rows > 0, !buckets.isEmpty else { return nil }
 
-        let gx = min(gridColumns - 1, max(0, Int(point.x / max(1, size.width) * CGFloat(gridColumns))))
-        let gy = min(gridRows - 1, max(0, Int(point.y / max(1, size.height) * CGFloat(gridRows))))
-        let bucket = buckets[gy * gridColumns + gx]
-        for index in bucket.reversed() {
+        let nx = max(0, min(0.999999, point.x / max(1, size.width)))
+        let ny = max(0, min(0.999999, point.y / max(1, size.height)))
+        guard nx.isFinite, ny.isFinite else { return nil }
+
+        let gx = min(cols - 1, max(0, Int(nx * CGFloat(cols))))
+        let gy = min(rows - 1, max(0, Int(ny * CGFloat(rows))))
+        let bucketIndex = gy * cols + gx
+        guard buckets.indices.contains(bucketIndex) else { return nil }
+
+        for index in buckets[bucketIndex].reversed() {
             guard cells.indices.contains(index) else { continue }
             if cells[index].rect.contains(point) { return cells[index].nodeID }
         }
@@ -707,165 +707,183 @@ private struct RenderModel {
     }
 }
 
-private struct BasicTreemap {
-    struct Weighted {
-        let id: Int
-        let area: CGFloat
-    }
-
+private struct MTBinaryLayout {
     let nodes: [MTNode]
 
-    func layout(ids: [Int], rect: CGRect) -> [(Int, CGRect)] {
-        let valid = ids.filter { nodes.indices.contains($0) && nodes[$0].allocatedSize > 0 }
-        guard !valid.isEmpty, rect.width > 0, rect.height > 0 else { return [] }
-        if valid.count == 1 { return [(valid[0], rect)] }
+    func layout(ids: [Int], in rect: CGRect) -> [(Int, CGRect)] {
+        let safeRect = rect.standardized
+        guard rectIsFinite(safeRect), safeRect.width > 0.5, safeRect.height > 0.5 else { return [] }
 
-        let total = valid.reduce(UInt64(0)) { $0 + nodes[$1].allocatedSize }
-        guard total > 0 else { return [] }
-
-        var weighted = valid.map {
-            Weighted(id: $0, area: rect.width * rect.height * CGFloat(Double(nodes[$0].allocatedSize) / Double(total)))
+        let valid = ids.filter {
+            nodes.indices.contains($0) && nodes[$0].allocatedSize > 0
+        }.sorted {
+            nodes[$0].allocatedSize > nodes[$1].allocatedSize
         }
-        weighted.sort { $0.area > $1.area }
+        guard !valid.isEmpty else { return [] }
 
-        var output: [(Int, CGRect)] = []
-        var remaining = rect
-        var row: [Weighted] = []
-
-        while !weighted.isEmpty {
-            let item = weighted[0]
-            let side = max(1, min(remaining.width, remaining.height))
-            if row.isEmpty || worst(row + [item], side) <= worst(row, side) {
-                row.append(item)
-                weighted.removeFirst()
-            } else {
-                place(row, &remaining, &output)
-                row.removeAll(keepingCapacity: true)
-            }
-        }
-        if !row.isEmpty { place(row, &remaining, &output) }
-        return output
+        var result: [(Int, CGRect)] = []
+        result.reserveCapacity(valid.count)
+        split(valid, rect: safeRect, output: &result)
+        return result
     }
 
-    private func worst(_ row: [Weighted], _ side: CGFloat) -> CGFloat {
-        guard !row.isEmpty else { return .greatestFiniteMagnitude }
-        let sum = row.reduce(CGFloat(0)) { $0 + $1.area }
-        let maxArea = row.map(\.area).max() ?? 0
-        let minArea = max(row.map(\.area).min() ?? 0, 0.0001)
-        let side2 = side * side
-        let sum2 = sum * sum
-        return max(side2 * maxArea / max(sum2, 0.0001), sum2 / max(side2 * minArea, 0.0001))
-    }
+    private func split(_ ids: [Int], rect: CGRect, output: inout [(Int, CGRect)]) {
+        guard !ids.isEmpty, rectIsFinite(rect), rect.width > 0.5, rect.height > 0.5 else { return }
 
-    private func place(_ row: [Weighted], _ remaining: inout CGRect, _ output: inout [(Int, CGRect)]) {
-        guard !row.isEmpty else { return }
-        let area = row.reduce(CGFloat(0)) { $0 + $1.area }
+        if ids.count == 1 {
+            output.append((ids[0], rect))
+            return
+        }
 
-        if remaining.width >= remaining.height {
-            let strip = remaining.height > 0 ? area / remaining.height : 0
-            var y = remaining.minY
-            for (i, item) in row.enumerated() {
-                let h = i == row.count - 1 ? remaining.maxY - y : (strip > 0 ? item.area / strip : 0)
-                output.append((item.id, CGRect(x: remaining.minX, y: y, width: strip, height: max(0, h))))
-                y += h
-            }
-            remaining = CGRect(x: remaining.minX + strip, y: remaining.minY, width: max(0, remaining.width - strip), height: remaining.height)
+        let total = ids.reduce(UInt64(0)) { $0 &+ nodes[$1].allocatedSize }
+        guard total > 0 else { return }
+
+        let target = Double(total) / 2.0
+        var running = 0.0
+        var splitIndex = 1
+
+        for i in 0..<(ids.count - 1) {
+            running += Double(nodes[ids[i]].allocatedSize)
+            splitIndex = i + 1
+            if running >= target { break }
+        }
+
+        splitIndex = max(1, min(ids.count - 1, splitIndex))
+        let left = Array(ids[..<splitIndex])
+        let right = Array(ids[splitIndex...])
+
+        let leftTotal = left.reduce(UInt64(0)) { $0 &+ nodes[$1].allocatedSize }
+        var fraction = Double(leftTotal) / Double(total)
+        if !fraction.isFinite { fraction = 0.5 }
+        fraction = max(0.001, min(0.999, fraction))
+
+        if rect.width >= rect.height {
+            let firstWidth = rect.width * CGFloat(fraction)
+            guard firstWidth.isFinite else { return }
+            let r1 = CGRect(x: rect.minX, y: rect.minY, width: firstWidth, height: rect.height)
+            let r2 = CGRect(x: rect.minX + firstWidth, y: rect.minY, width: max(0, rect.width - firstWidth), height: rect.height)
+            split(left, rect: r1, output: &output)
+            split(right, rect: r2, output: &output)
         } else {
-            let strip = remaining.width > 0 ? area / remaining.width : 0
-            var x = remaining.minX
-            for (i, item) in row.enumerated() {
-                let w = i == row.count - 1 ? remaining.maxX - x : (strip > 0 ? item.area / strip : 0)
-                output.append((item.id, CGRect(x: x, y: remaining.minY, width: max(0, w), height: strip)))
-                x += w
-            }
-            remaining = CGRect(x: remaining.minX, y: remaining.minY + strip, width: remaining.width, height: max(0, remaining.height - strip))
+            let firstHeight = rect.height * CGFloat(fraction)
+            guard firstHeight.isFinite else { return }
+            let r1 = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: firstHeight)
+            let r2 = CGRect(x: rect.minX, y: rect.minY + firstHeight, width: rect.width, height: max(0, rect.height - firstHeight))
+            split(left, rect: r1, output: &output)
+            split(right, rect: r2, output: &output)
         }
     }
 }
 
-private struct TreemapBuilder {
+private struct MTStableBuilder {
     let nodes: [MTNode]
-    let maxCells = 2200
-    let minRecurseArea: CGFloat = 90
-    let minSide: CGFloat = 4
-    let maxDepth = 12
+    let maxCells = 1500
+    let maxDepth = 8
+    let minRecursiveArea: CGFloat = 420
+    let minRecursiveSide: CGFloat = 16
 
-    func build(rootID: Int, size: CGSize) -> RenderModel {
-        guard nodes.indices.contains(rootID), size.width > 4, size.height > 4 else {
-            return RenderModel(cells: [], frames: [], buckets: [], gridColumns: 0, gridRows: 0, size: size)
+    func build(rootID: Int, size: CGSize) -> MTRenderModel {
+        guard nodes.indices.contains(rootID),
+              size.width.isFinite, size.height.isFinite,
+              size.width > 4, size.height > 4 else {
+            return MTRenderModel(cells: [], frames: [], buckets: [], cols: 0, rows: 0, size: size)
         }
 
-        var cells: [DrawCell] = []
-        var frames: [FolderFrame] = []
-        cells.reserveCapacity(1600)
-        frames.reserveCapacity(300)
+        var cells: [MTDrawCell] = []
+        var frames: [MTFolderFrame] = []
+        cells.reserveCapacity(1200)
+        frames.reserveCapacity(120)
 
-        let layout = BasicTreemap(nodes: nodes)
+        let layout = MTBinaryLayout(nodes: nodes)
         let rootRect = CGRect(origin: .zero, size: size)
         let children = nodes[rootID].children.filter { nodes.indices.contains($0) && nodes[$0].allocatedSize > 0 }
 
-        for (id, rect) in layout.layout(ids: children, rect: rootRect) {
+        for (id, rect) in layout.layout(ids: children, in: rootRect) {
             append(id: id, rect: rect, depth: 0, layout: layout, cells: &cells, frames: &frames)
             if cells.count >= maxCells { break }
         }
 
-        let cols = max(12, min(48, Int(size.width / 28)))
-        let rows = max(8, min(32, Int(size.height / 28)))
-        var buckets = Array(repeating: [Int](), count: cols * rows)
+        let cols = max(12, min(42, Int(max(1, size.width) / 34)))
+        let rows = max(8, min(28, Int(max(1, size.height) / 34)))
+        var buckets = Array(repeating: [Int](), count: max(1, cols * rows))
 
         for (index, cell) in cells.enumerated() {
-            let minX = max(0, min(cols - 1, Int(cell.rect.minX / max(1, size.width) * CGFloat(cols))))
-            let maxX = max(0, min(cols - 1, Int(max(cell.rect.minX, cell.rect.maxX - 0.01) / max(1, size.width) * CGFloat(cols))))
-            let minY = max(0, min(rows - 1, Int(cell.rect.minY / max(1, size.height) * CGFloat(rows))))
-            let maxY = max(0, min(rows - 1, Int(max(cell.rect.minY, cell.rect.maxY - 0.01) / max(1, size.height) * CGFloat(rows))))
+            let r = cell.rect.standardized
+            guard rectIsFinite(r), r.width > 0, r.height > 0 else { continue }
+
+            let minNX = max(0, min(0.999999, r.minX / max(1, size.width)))
+            let maxNX = max(0, min(0.999999, max(r.minX, r.maxX - 0.01) / max(1, size.width)))
+            let minNY = max(0, min(0.999999, r.minY / max(1, size.height)))
+            let maxNY = max(0, min(0.999999, max(r.minY, r.maxY - 0.01) / max(1, size.height)))
+
+            guard minNX.isFinite, maxNX.isFinite, minNY.isFinite, maxNY.isFinite else { continue }
+
+            let minX = min(cols - 1, max(0, Int(minNX * CGFloat(cols))))
+            let maxX = min(cols - 1, max(0, Int(maxNX * CGFloat(cols))))
+            let minY = min(rows - 1, max(0, Int(minNY * CGFloat(rows))))
+            let maxY = min(rows - 1, max(0, Int(maxNY * CGFloat(rows))))
+
+            guard minX <= maxX, minY <= maxY else { continue }
             for gy in minY...maxY {
                 for gx in minX...maxX {
-                    buckets[gy * cols + gx].append(index)
+                    let bucketIndex = gy * cols + gx
+                    if buckets.indices.contains(bucketIndex) { buckets[bucketIndex].append(index) }
                 }
             }
         }
 
-        return RenderModel(cells: cells, frames: frames, buckets: buckets, gridColumns: cols, gridRows: rows, size: size)
+        return MTRenderModel(cells: cells, frames: frames, buckets: buckets, cols: cols, rows: rows, size: size)
     }
 
     private func append(
         id: Int,
         rect: CGRect,
         depth: Int,
-        layout: BasicTreemap,
-        cells: inout [DrawCell],
-        frames: inout [FolderFrame]
+        layout: MTBinaryLayout,
+        cells: inout [MTDrawCell],
+        frames: inout [MTFolderFrame]
     ) {
-        guard nodes.indices.contains(id), rect.width > 0.5, rect.height > 0.5, cells.count < maxCells else { return }
+        let rect = rect.standardized
+        guard nodes.indices.contains(id), rectIsFinite(rect), rect.width > 0.5, rect.height > 0.5, cells.count < maxCells else { return }
         let node = nodes[id]
 
         if !node.isDirectory {
-            cells.append(DrawCell(id: cells.count, nodeID: id, rect: rect.insetBy(dx: 0.35, dy: 0.35), kind: .file))
+            let cellRect = safeInset(rect, amount: 0.35)
+            if rectIsFinite(cellRect) {
+                cells.append(MTDrawCell(id: cells.count, nodeID: id, rect: cellRect, kind: .file))
+            }
             return
         }
 
-        if depth <= 3 && rect.width > 65 && rect.height > 35 {
-            frames.append(FolderFrame(id: frames.count, nodeID: id, rect: rect.insetBy(dx: 0.2, dy: 0.2), depth: depth))
+        if depth <= 2 && rect.width > 135 && rect.height > 75 {
+            let frameRect = safeInset(rect, amount: 0.2)
+            if rectIsFinite(frameRect) {
+                frames.append(MTFolderFrame(id: frames.count, nodeID: id, rect: frameRect, depth: depth))
+            }
         }
 
         let area = rect.width * rect.height
         let children = node.children.filter { nodes.indices.contains($0) && nodes[$0].allocatedSize > 0 }
-        let canRecurse = depth < maxDepth && area >= minRecurseArea && rect.width >= minSide && rect.height >= minSide && !children.isEmpty && cells.count < maxCells - 8
+        let canRecurse = depth < maxDepth && area.isFinite && area >= minRecursiveArea && rect.width >= minRecursiveSide && rect.height >= minRecursiveSide && !children.isEmpty && cells.count < maxCells - 12
 
         if !canRecurse {
-            cells.append(DrawCell(id: cells.count, nodeID: id, rect: rect.insetBy(dx: 0.35, dy: 0.35), kind: .aggregate))
+            let cellRect = safeInset(rect, amount: 0.35)
+            if rectIsFinite(cellRect) {
+                cells.append(MTDrawCell(id: cells.count, nodeID: id, rect: cellRect, kind: .aggregate))
+            }
             return
         }
 
-        let inner = rect.insetBy(dx: depth <= 2 ? 1.0 : 0.45, dy: depth <= 2 ? 1.0 : 0.45)
-        guard inner.width > 1, inner.height > 1 else {
-            cells.append(DrawCell(id: cells.count, nodeID: id, rect: rect, kind: .aggregate))
+        let inset: CGFloat = depth <= 1 ? 1.2 : 0.65
+        let inner = safeInset(rect, amount: inset)
+        guard rectIsFinite(inner), inner.width > 2, inner.height > 2 else {
+            cells.append(MTDrawCell(id: cells.count, nodeID: id, rect: rect, kind: .aggregate))
             return
         }
 
-        let childRects = layout.layout(ids: children, rect: inner)
+        let childRects = layout.layout(ids: children, in: inner)
         if childRects.isEmpty {
-            cells.append(DrawCell(id: cells.count, nodeID: id, rect: rect, kind: .aggregate))
+            cells.append(MTDrawCell(id: cells.count, nodeID: id, rect: rect, kind: .aggregate))
             return
         }
 
@@ -876,7 +894,7 @@ private struct TreemapBuilder {
     }
 }
 
-private struct FastTreemap: View {
+private struct StableTreemap: View {
     let nodes: [MTNode]
     let rootID: Int
     @Binding var selectedID: Int?
@@ -891,7 +909,7 @@ private struct FastTreemap: View {
                     Text(mtBytes(nodes[rootID].allocatedSize)).font(.caption).foregroundStyle(Color.secondary).monospacedDigit()
                 }
                 Spacer()
-                Text("Files colored by type • hover for details")
+                Text("Files colored by type • small folders grouped • hover for details")
                     .font(.caption).foregroundStyle(Color.secondary)
             }
             .padding(.horizontal, 9).padding(.vertical, 6)
@@ -901,50 +919,46 @@ private struct FastTreemap: View {
 
             GeometryReader { proxy in
                 let size = CGSize(width: max(1, proxy.size.width), height: max(1, proxy.size.height))
-                let model = TreemapBuilder(nodes: nodes).build(rootID: rootID, size: size)
+                let model = MTStableBuilder(nodes: nodes).build(rootID: rootID, size: size)
 
                 ZStack(alignment: .topTrailing) {
                     Canvas { context, canvasSize in
                         context.fill(Path(CGRect(origin: .zero, size: canvasSize)), with: .color(Color(nsColor: .windowBackgroundColor)))
 
                         for cell in model.cells {
-                            guard nodes.indices.contains(cell.nodeID) else { continue }
+                            guard nodes.indices.contains(cell.nodeID), rectIsFinite(cell.rect) else { continue }
                             let node = nodes[cell.nodeID]
-                            let color = cell.kind == .file ? fileColor(node) : Color.gray
+                            let color = cell.kind == .file ? fileColor(node) : aggregateColor(node)
                             let gradient = GraphicsContext.Shading.linearGradient(
-                                Gradient(colors: [color.opacity(0.93), color.opacity(0.64)]),
+                                Gradient(colors: [color.opacity(0.92), color.opacity(0.66)]),
                                 startPoint: CGPoint(x: cell.rect.minX, y: cell.rect.minY),
                                 endPoint: CGPoint(x: cell.rect.maxX, y: cell.rect.maxY)
                             )
                             context.fill(Path(cell.rect), with: gradient)
-                            context.stroke(Path(cell.rect), with: .color(selectedID == node.id ? Color.white : Color.black.opacity(0.42)), lineWidth: selectedID == node.id ? 2.2 : 0.55)
+                            context.stroke(Path(cell.rect), with: .color(selectedID == node.id ? Color.white : Color.black.opacity(0.40)), lineWidth: selectedID == node.id ? 2.2 : 0.6)
 
-                            if cell.rect.width > 92 && cell.rect.height > 44 {
+                            if cell.rect.width > 115 && cell.rect.height > 56 {
                                 let title = Text(node.name)
-                                    .font(cell.rect.width > 170 && cell.rect.height > 72 ? .caption.weight(.semibold) : .caption2.weight(.semibold))
+                                    .font(cell.rect.width > 190 && cell.rect.height > 84 ? .caption.weight(.semibold) : .caption2.weight(.semibold))
                                     .foregroundStyle(Color.white)
-                                context.draw(title, at: CGPoint(x: cell.rect.minX + 5, y: cell.rect.minY + 4), anchor: .topLeading)
+                                context.draw(title, at: CGPoint(x: cell.rect.minX + 6, y: cell.rect.minY + 5), anchor: .topLeading)
 
-                                if cell.rect.width > 120 && cell.rect.height > 64 {
-                                    let subtitle = Text(mtBytes(node.allocatedSize)).font(.caption2).foregroundStyle(Color.white.opacity(0.9))
-                                    context.draw(subtitle, at: CGPoint(x: cell.rect.minX + 5, y: cell.rect.minY + 21), anchor: .topLeading)
+                                if cell.rect.width > 145 && cell.rect.height > 78 {
+                                    let subtitle = Text(mtBytes(node.allocatedSize)).font(.caption2).foregroundStyle(Color.white.opacity(0.88))
+                                    context.draw(subtitle, at: CGPoint(x: cell.rect.minX + 6, y: cell.rect.minY + 23), anchor: .topLeading)
                                 }
                             }
                         }
 
                         for frame in model.frames {
-                            guard nodes.indices.contains(frame.nodeID) else { continue }
-                            context.stroke(
-                                Path(frame.rect),
-                                with: .color(Color.white.opacity(frame.depth == 0 ? 0.48 : 0.24)),
-                                lineWidth: frame.depth == 0 ? 1.5 : 0.8
-                            )
+                            guard nodes.indices.contains(frame.nodeID), rectIsFinite(frame.rect) else { continue }
+                            context.stroke(Path(frame.rect), with: .color(Color.white.opacity(frame.depth == 0 ? 0.34 : 0.16)), lineWidth: frame.depth == 0 ? 1.4 : 0.8)
 
-                            if frame.depth <= 1 && frame.rect.width > 150 && frame.rect.height > 70 {
+                            if frame.depth == 0 && frame.rect.width > 190 && frame.rect.height > 100 {
                                 let label = Text(nodes[frame.nodeID].name)
                                     .font(.caption.weight(.bold))
-                                    .foregroundStyle(Color.white.opacity(0.92))
-                                context.draw(label, at: CGPoint(x: frame.rect.minX + 6, y: frame.rect.minY + 5), anchor: .topLeading)
+                                    .foregroundStyle(Color.white.opacity(0.90))
+                                context.draw(label, at: CGPoint(x: frame.rect.minX + 7, y: frame.rect.minY + 6), anchor: .topLeading)
                             }
                         }
                     }
@@ -963,9 +977,7 @@ private struct FastTreemap: View {
                     }
 
                     if let hoveredID, nodes.indices.contains(hoveredID) {
-                        hoverCard(nodes[hoveredID])
-                            .padding(10)
-                            .allowsHitTesting(false)
+                        hoverCard(nodes[hoveredID]).padding(10).allowsHitTesting(false)
                     }
                 }
                 .clipped()
@@ -1003,6 +1015,14 @@ private struct FastTreemap: View {
     }
 }
 
+private func aggregateColor(_ node: MTNode) -> Color {
+    let lower = node.name.lowercased()
+    if lower.contains("steam") || lower.contains("game") { return Color.indigo }
+    if lower.contains("cache") { return Color.gray }
+    if lower.contains("application") { return Color.teal }
+    return Color(nsColor: .systemGray)
+}
+
 private func fileColor(_ node: MTNode) -> Color {
     let ext = (node.name as NSString).pathExtension.lowercased()
     switch ext {
@@ -1021,6 +1041,17 @@ private func fileColor(_ node: MTNode) -> Color {
         let palette: [Color] = [.red, .mint, .yellow, .indigo, .brown, .blue, .green, .purple]
         return palette[abs(hash) % palette.count]
     }
+}
+
+private func rectIsFinite(_ rect: CGRect) -> Bool {
+    rect.origin.x.isFinite && rect.origin.y.isFinite && rect.width.isFinite && rect.height.isFinite
+}
+
+private func safeInset(_ rect: CGRect, amount: CGFloat) -> CGRect {
+    guard rectIsFinite(rect) else { return .zero }
+    let maxInset = max(0, min(amount, min(rect.width, rect.height) / 2 - 0.01))
+    guard maxInset.isFinite else { return rect }
+    return rect.insetBy(dx: maxInset, dy: maxInset)
 }
 
 private func mtBytes(_ value: UInt64) -> String {
