@@ -351,3 +351,268 @@ private struct MTTreeRow: View, Equatable {
             .padding(.horizontal, 6)
     }
 }
+
+// MARK: - Extension analysis
+
+struct MTExtensionStat: Identifiable, Hashable, Sendable {
+    let extensionKey: String
+    let logicalSize: UInt64
+    let allocatedSize: UInt64
+    let fileCount: UInt64
+    let categoryRaw: String
+
+    var id: String { extensionKey }
+}
+
+@MainActor
+final class MTExtensionIndexModel: ObservableObject {
+    @Published private(set) var stats: [MTExtensionStat] = []
+    @Published private(set) var isIndexing = false
+
+    private var version = -1
+    private var task: Task<Void, Never>?
+
+    func sync(nodes: [MTNode], version: Int) {
+        guard self.version != version else { return }
+        self.version = version
+        task?.cancel()
+        stats = []
+        guard !nodes.isEmpty else {
+            isIndexing = false
+            return
+        }
+
+        let snapshot = nodes
+        isIndexing = true
+        task = Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                struct Bucket {
+                    var logical: UInt64 = 0
+                    var allocated: UInt64 = 0
+                    var files: UInt64 = 0
+                    var categoryWeights: [String: UInt64] = [:]
+                }
+
+                var buckets: [String: Bucket] = [:]
+                buckets.reserveCapacity(1800)
+
+                for node in snapshot where !node.isDirectory {
+                    if Task.isCancelled { return [MTExtensionStat]() }
+                    let rawExtension = (node.name as NSString).pathExtension.lowercased()
+                    let key = rawExtension.isEmpty ? "(no extension)" : "." + rawExtension
+                    var bucket = buckets[key] ?? Bucket()
+                    bucket.logical = mtSafeAdd(bucket.logical, node.logicalSize)
+                    bucket.allocated = mtSafeAdd(bucket.allocated, node.allocatedSize)
+                    bucket.files = mtSafeAdd(bucket.files, 1)
+                    let category = mtDirectCategory(node).rawValue
+                    bucket.categoryWeights[category, default: 0] = mtSafeAdd(
+                        bucket.categoryWeights[category, default: 0], node.allocatedSize
+                    )
+                    buckets[key] = bucket
+                }
+
+                return buckets.map { key, bucket in
+                    let category = bucket.categoryWeights.max(by: { $0.value < $1.value })?.key ?? MTCategory.other.rawValue
+                    return MTExtensionStat(
+                        extensionKey: key,
+                        logicalSize: bucket.logical,
+                        allocatedSize: bucket.allocated,
+                        fileCount: bucket.files,
+                        categoryRaw: category
+                    )
+                }
+                .sorted {
+                    if $0.allocatedSize != $1.allocatedSize { return $0.allocatedSize > $1.allocatedSize }
+                    return $0.extensionKey.localizedStandardCompare($1.extensionKey) == .orderedAscending
+                }
+            }.value
+
+            guard !Task.isCancelled, let self else { return }
+            self.stats = result
+            self.isIndexing = false
+        }
+    }
+
+    deinit { task?.cancel() }
+}
+
+struct MTExtensionPane: View {
+    let nodes: [MTNode]
+    let scanVersion: Int
+    let totalAllocated: UInt64
+
+    @StateObject private var model = MTExtensionIndexModel()
+    @State private var selectedExtension: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: "list.bullet.rectangle")
+                    .foregroundStyle(Color.secondary)
+                Text("File Types / Extensions")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                if model.isIndexing {
+                    ProgressView().controlSize(.mini)
+                    Text("Indexing…")
+                        .font(.caption2)
+                        .foregroundStyle(Color.secondary)
+                } else {
+                    Text("\(model.stats.count.formatted()) extensions")
+                        .font(.caption2)
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(.bar)
+
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        ForEach(model.stats) { stat in
+                            MTExtensionRow(
+                                stat: stat,
+                                total: max(totalAllocated, 1),
+                                selected: selectedExtension == stat.extensionKey
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedExtension = selectedExtension == stat.extensionKey ? nil : stat.extensionKey
+                            }
+                        }
+                    } header: {
+                        HStack(spacing: 0) {
+                            extensionHeader("", 22, .center)
+                            extensionHeader("Extension", 88, .leading)
+                            extensionHeader("File Type", 130, .leading)
+                            extensionHeader("Percent", 82, .trailing)
+                            extensionHeader("Size", 96, .trailing)
+                            extensionHeader("Allocated", 100, .trailing)
+                            extensionHeader("Files", 88, .trailing)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.secondary)
+                        .padding(.vertical, 6)
+                        .background(.bar)
+                    }
+                }
+                .frame(minWidth: 606, alignment: .topLeading)
+            }
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+
+            if let selectedExtension {
+                HStack(spacing: 5) {
+                    Image(systemName: "scope")
+                    Text(selectedExtension)
+                        .fontWeight(.semibold)
+                    Text("selected")
+                        .foregroundStyle(Color.secondary)
+                    Spacer()
+                    Button("Clear") { self.selectedExtension = nil }
+                        .buttonStyle(.plain)
+                }
+                .font(.caption2)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Color.accentColor.opacity(0.10))
+            }
+        }
+        .onAppear { model.sync(nodes: nodes, version: scanVersion) }
+        .onChange(of: scanVersion) { _, value in
+            selectedExtension = nil
+            model.sync(nodes: nodes, version: value)
+        }
+    }
+
+    private func extensionHeader(_ text: String, _ width: CGFloat, _ alignment: Alignment) -> some View {
+        Text(text).frame(width: width, alignment: alignment).padding(.horizontal, 4)
+    }
+}
+
+private struct MTExtensionRow: View {
+    let stat: MTExtensionStat
+    let total: UInt64
+    let selected: Bool
+
+    private var category: MTCategory {
+        MTCategory(rawValue: stat.categoryRaw) ?? .other
+    }
+
+    private var ratio: Double {
+        Double(stat.allocatedSize) / Double(max(total, 1))
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(category.color)
+                .frame(width: 8, height: 20)
+                .frame(width: 22)
+
+            extensionCell(stat.extensionKey, 88, .leading, monospaced: true)
+            extensionCell(extensionTypeName(stat.extensionKey, category: category), 130, .leading)
+            extensionCell(ratio.formatted(.percent.precision(.fractionLength(1))), 82, .trailing, monospaced: true)
+            extensionCell(mtBytes(stat.logicalSize), 96, .trailing, monospaced: true)
+            extensionCell(mtBytes(stat.allocatedSize), 100, .trailing, monospaced: true)
+            extensionCell(stat.fileCount.formatted(), 88, .trailing, monospaced: true)
+        }
+        .font(.callout)
+        .frame(height: 27)
+        .background(selected ? Color.accentColor.opacity(0.30) : Color.clear)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.22)
+        }
+        .help("\(stat.extensionKey) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) allocated • \(stat.fileCount.formatted()) files")
+    }
+
+    private func extensionCell(_ text: String, _ width: CGFloat, _ alignment: Alignment, monospaced: Bool = false) -> some View {
+        Group {
+            if monospaced {
+                Text(text).monospacedDigit()
+            } else {
+                Text(text)
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .frame(width: width, alignment: alignment)
+        .padding(.horizontal, 4)
+    }
+
+    private func extensionTypeName(_ key: String, category: MTCategory) -> String {
+        let ext = key.hasPrefix(".") ? String(key.dropFirst()) : ""
+        switch ext {
+        case "dylib": return "Dynamic Library"
+        case "framework": return "Framework"
+        case "metallib": return "Metal Library"
+        case "car": return "Asset Catalog"
+        case "plist": return "Property List"
+        case "strings", "stringsdict": return "Localization"
+        case "json": return "JSON Data"
+        case "xml": return "XML Data"
+        case "yaml", "yml", "toml", "ini", "cfg", "conf": return "Configuration"
+        case "db", "sqlite", "sqlite3": return "Database"
+        case "log": return "Log File"
+        case "swift": return "Swift Source"
+        case "c", "h", "cpp", "cc", "hpp": return "C/C++ Source"
+        case "js", "ts": return "JavaScript / TS"
+        case "py": return "Python Source"
+        case "pak", "vpk", "pck", "obb": return "Game Archive"
+        case "assets", "asset", "res", "ress", "resource": return "Resource Data"
+        case "bundle": return "Bundle Data"
+        case "mov", "mp4", "m4v", "mkv", "avi", "webm": return "Video"
+        case "png", "jpg", "jpeg", "heic", "gif", "webp": return "Image"
+        case "mp3", "m4a", "aac", "wav", "flac", "ogg", "bank": return "Audio"
+        case "zip", "7z", "rar", "tar", "gz", "xz": return "Archive"
+        case "dmg": return "Disk Image"
+        case "pkg": return "Installer Package"
+        case "pdf": return "PDF Document"
+        case "txt", "md", "rtf": return "Text Document"
+        case "app": return "Application"
+        case "": return key == "(no extension)" ? "No Extension" : "File"
+        default:
+            return category == .other ? "File" : category.rawValue
+        }
+    }
+}
