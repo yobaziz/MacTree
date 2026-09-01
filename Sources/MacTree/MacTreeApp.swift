@@ -270,8 +270,6 @@ actor DiskScanner {
             return true
         }
 
-        // On macOS the Data volume is already exposed through firmlinks at /Users,
-        // /Applications, /Library, etc. Walking it again duplicates most of the disk.
         if relativePath == "System/Volumes" || relativePath.hasPrefix("System/Volumes/") {
             return true
         }
@@ -758,7 +756,7 @@ private struct TreeRowView: View {
 
     private var modifiedText: String {
         guard let date = node.modifiedAt else { return "—" }
-        return Self.dateFormatter.string(from: date)
+        return date.formatted(date: .numeric, time: .shortened)
     }
 
     private var iconName: String {
@@ -793,13 +791,6 @@ private struct TreeRowView: View {
             .frame(width: width, alignment: alignment)
             .padding(.horizontal, 6)
     }
-
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter
-    }()
 }
 
 // MARK: - Treemap
@@ -1058,14 +1049,10 @@ private struct TreemapTile: View {
 
 // MARK: - Formatting
 
-private let sharedByteFormatter: ByteCountFormatter = {
+private func formatBytes(_ value: UInt64) -> String {
     let formatter = ByteCountFormatter()
     formatter.countStyle = .file
     formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
     formatter.isAdaptive = true
-    return formatter
-}()
-
-private func formatBytes(_ value: UInt64) -> String {
-    sharedByteFormatter.string(fromByteCount: Int64(clamping: value))
+    return formatter.string(fromByteCount: Int64(clamping: value))
 }
