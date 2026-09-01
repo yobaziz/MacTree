@@ -163,6 +163,7 @@ func mtL(_ key: String) -> String {
 struct MacTreeApp: App {
     @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
     @AppStorage("mactree.appearance") private var appearance = MTAppearanceChoice.system.rawValue
+    @StateObject private var controller = MTFastController()
 
     private var preferredScheme: ColorScheme? {
         MTAppearanceChoice(rawValue: appearance)?.scheme
@@ -170,7 +171,7 @@ struct MacTreeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainView()
+            MainView(controller: controller)
                 .frame(minWidth: 1220, minHeight: 720)
                 .preferredColorScheme(preferredScheme)
                 .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
@@ -221,7 +222,7 @@ struct MainView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
     @AppStorage("mactree.appearance") private var appearance = MTAppearanceChoice.system.rawValue
-    @StateObject private var controller = MTFastController()
+    @ObservedObject var controller: MTFastController
     @State private var selectedID: Int?
     @State private var hoveredID: Int?
 
