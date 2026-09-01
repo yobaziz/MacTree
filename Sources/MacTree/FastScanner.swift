@@ -10,6 +10,7 @@ actor MTFastScanner {
         let id: Int
         let parentID: Int?
         let name: String
+        /// Absolute path for directories only. Files keep this empty.
         let path: String
         let isDirectory: Bool
         var logicalSize: UInt64
@@ -47,7 +48,8 @@ actor MTFastScanner {
         ]
         builders.reserveCapacity(rootPath == "/" ? 1_250_000 : 450_000)
 
-        // Queue node IDs only. Paths already live in Builder, avoiding a second huge path dictionary.
+        // Only directory node IDs are queued. Directories retain absolute paths;
+        // files do not, which saves hundreds of MB on large scans.
         var directoryQueue: [Int] = [0]
         directoryQueue.reserveCapacity(rootPath == "/" ? 150_000 : 60_000)
         var queueIndex = 0
@@ -91,7 +93,6 @@ actor MTFastScanner {
                 let nodeFiles: UInt64 = isDirectory ? 0 : 1
 
                 // A corrupt/shifted metadata record must never poison the whole tree.
-                // Only suspicious outliers pay for a single lstat verification.
                 if !isDirectory && (nodeAllocated > maxReasonableAllocated || nodeLogical > maxReasonableLogical) {
                     var info = stat()
                     if fullPath.withCString({ lstat($0, &info) }) == 0 {
@@ -113,7 +114,8 @@ actor MTFastScanner {
 
                 let id = builders.count
                 builders.append(
-                    Builder(id: id, parentID: parentID, name: entry.name, path: fullPath,
+                    Builder(id: id, parentID: parentID, name: entry.name,
+                            path: isDirectory ? fullPath : "",
                             isDirectory: isDirectory, logicalSize: nodeLogical,
                             allocatedSize: nodeAllocated, fileCount: nodeFiles,
                             modifiedTime: nodeModified, children: [])
@@ -124,7 +126,6 @@ actor MTFastScanner {
             }
 
             if !usedBulk {
-                // External/legacy filesystems can reject getattrlistbulk. Fall back only for this directory.
                 let names = (try? FileManager.default.contentsOfDirectory(atPath: directoryPath)) ?? []
                 for name in names {
                     if Task.isCancelled { throw CancellationError() }
@@ -155,7 +156,8 @@ actor MTFastScanner {
 
                     let id = builders.count
                     builders.append(
-                        Builder(id: id, parentID: parentID, name: name, path: fullPath,
+                        Builder(id: id, parentID: parentID, name: name,
+                                path: isDirectory ? fullPath : "",
                                 isDirectory: isDirectory, logicalSize: nodeLogical,
                                 allocatedSize: nodeAllocated, fileCount: nodeFiles,
                                 modifiedTime: TimeInterval(info.st_mtimespec.tv_sec), children: [])
@@ -175,7 +177,6 @@ actor MTFastScanner {
         }
 
         if builders.count > 1 {
-            // Parents are always created before descendants, so reverse order aggregates in one pass.
             for index in stride(from: builders.count - 1, through: 1, by: -1) {
                 guard let parent = builders[index].parentID else { continue }
                 builders[parent].logicalSize = mtSafeAdd(builders[parent].logicalSize, builders[index].logicalSize)
@@ -184,32 +185,31 @@ actor MTFastScanner {
             }
         }
 
-        // Sort while we still have Builders. The old implementation copied the entire
-        // MTNode array into sizeReference and then mutated nodes, which could trigger a
-        // full 1.2M-node copy-on-write allocation.
-        let sortSizes = builders.map { $0.allocatedSize }
-        let sortNames = builders.map { $0.name }
+        // Sort one folder at a time. This avoids allocating million-element
+        // sortNames/sortSizes mirrors of the entire tree.
         for index in builders.indices where !builders[index].children.isEmpty {
-            builders[index].children.sort {
-                let leftSize = sortSizes[$0]
-                let rightSize = sortSizes[$1]
-                if leftSize != rightSize { return leftSize > rightSize }
-                return sortNames[$0].localizedStandardCompare(sortNames[$1]) == .orderedAscending
+            let unsorted = builders[index].children
+            let sorted = unsorted.sorted { leftID, rightID in
+                let left = builders[leftID]
+                let right = builders[rightID]
+                if left.allocatedSize != right.allocatedSize { return left.allocatedSize > right.allocatedSize }
+                return left.name.localizedStandardCompare(right.name) == .orderedAscending
             }
+            builders[index].children = sorted
         }
 
         var nodes: [MTNode] = []
         nodes.reserveCapacity(builders.count)
         for builder in builders {
             nodes.append(
-                MTNode(id: builder.id, parentID: builder.parentID, name: builder.name, path: builder.path,
-                       isDirectory: builder.isDirectory, logicalSize: builder.logicalSize,
-                       allocatedSize: builder.allocatedSize, fileCount: builder.fileCount,
-                       modifiedTime: builder.modifiedTime, children: builder.children)
+                MTNode(id: builder.id, parentID: builder.parentID, name: builder.name,
+                       path: builder.path, isDirectory: builder.isDirectory,
+                       logicalSize: builder.logicalSize, allocatedSize: builder.allocatedSize,
+                       fileCount: builder.fileCount, modifiedTime: builder.modifiedTime,
+                       children: builder.children)
             )
         }
 
-        // Release scan-only storage before handing the snapshot to the UI.
         builders.removeAll(keepingCapacity: false)
         directoryQueue.removeAll(keepingCapacity: false)
         bulkBuffer.removeAll(keepingCapacity: false)
@@ -227,7 +227,7 @@ actor MTFastScanner {
     // Returns false only when the directory cannot use the bulk API at all.
     private func enumerateBulk(path: String, buffer: inout [UInt8], consume: (BulkEntry) -> Bool) -> Bool {
         let fd = path.withCString { Darwin.open($0, O_RDONLY) }
-        guard fd >= 0 else { return true } // Permission denied: keep scan moving.
+        guard fd >= 0 else { return true }
         defer { Darwin.close(fd) }
 
         var attributes = attrlist()
@@ -250,10 +250,7 @@ actor MTFastScanner {
             }
 
             if count == 0 { return true }
-            if count < 0 {
-                // Use legacy enumeration only when bulk was rejected before yielding anything.
-                return gotAnyBatch
-            }
+            if count < 0 { return gotAnyBatch }
             gotAnyBatch = true
 
             let shouldContinue = buffer.withUnsafeBytes { raw -> Bool in
@@ -323,11 +320,9 @@ actor MTFastScanner {
                     if allocated == 0 && logical > 0 { allocated = logical }
 
                     if let name, !name.isEmpty {
-                        if !consume(
-                            BulkEntry(name: name, objectType: objectType,
-                                      logicalSize: logical, allocatedSize: allocated,
-                                      modifiedTime: modified)
-                        ) {
+                        if !consume(BulkEntry(name: name, objectType: objectType,
+                                             logicalSize: logical, allocatedSize: allocated,
+                                             modifiedTime: modified)) {
                             return false
                         }
                     }
@@ -340,9 +335,6 @@ actor MTFastScanner {
         }
     }
 
-    // Darwin's getattrlist/getattrlistbulk ABI packs every attribute on a
-    // 4-byte boundary, including 64-bit values. Natural Swift alignment (8)
-    // is therefore wrong for timespec/off_t and shifts all following fields.
     private func read4<T>(_ field: inout UnsafeRawPointer,
                           base: UnsafeRawPointer,
                           end: UnsafeRawPointer) -> T? {
@@ -428,7 +420,7 @@ final class MTFastController: ObservableObject {
     }
 
     func refreshFullDiskAccess() {
-        fullDiskAccess = access("/Library/Application Support/com.apple.TCC/TCC.db", R_OK) == 0
+        fullDiskAccess = mtHasFullDiskAccess()
     }
 
     func refreshVolumeSpace() {
@@ -495,6 +487,7 @@ final class MTFastController: ObservableObject {
                 self.elapsed = snapshot.elapsed
                 self.search.setNodes(snapshot.nodes)
                 self.refreshVolumeSpace()
+                self.refreshFullDiskAccess()
                 self.scanVersion += 1
             } catch is CancellationError {
                 // Normal stop action.
