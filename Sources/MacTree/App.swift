@@ -22,11 +22,28 @@ enum MTAppearanceChoice: String, CaseIterable, Identifiable {
     case dark
 
     var id: String { rawValue }
-    var scheme: ColorScheme? {
+
+    var nsAppearance: NSAppearance? {
         switch self {
         case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+@MainActor
+func mtApplyAppearance(_ rawValue: String) {
+    let choice = MTAppearanceChoice(rawValue: rawValue) ?? .system
+    let target = choice.nsAppearance
+
+    NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0
+        context.allowsImplicitAnimation = false
+        NSApp.appearance = target
+        for window in NSApp.windows {
+            window.appearance = target
+            window.contentView?.needsDisplay = true
         }
     }
 }
@@ -78,6 +95,13 @@ private let mtTurkishStrings: [String: String] = [
     "Open in Terminal": "Terminal'de Aç",
     "Open Folder in Terminal": "Klasörü Terminal'de Aç",
     "Move to Trash": "Çöp Sepetine Taşı",
+    "Move to Trash?": "Çöp Sepetine taşınsın mı?",
+    "Cancel": "Vazgeç",
+    "This item will be moved to the Trash.": "Bu öğe Çöp Sepetine taşınacak.",
+    "Could not move item to Trash": "Öğe Çöp Sepetine taşınamadı",
+    "The item no longer exists at this location.": "Öğe artık bu konumda bulunmuyor.",
+    "macOS protects this system location.": "macOS bu sistem konumunu koruyor.",
+    "The item may be protected by macOS or require additional permission.": "Öğe macOS tarafından korunuyor veya ek izin gerektiriyor olabilir.",
 
     "Name": "Ad",
     "Size": "Boyut",
@@ -162,25 +186,18 @@ func mtL(_ key: String) -> String {
 @main
 struct MacTreeApp: App {
     @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
-    @AppStorage("mactree.appearance") private var appearance = MTAppearanceChoice.system.rawValue
     @StateObject private var controller = MTFastController()
-
-    private var preferredScheme: ColorScheme? {
-        MTAppearanceChoice(rawValue: appearance)?.scheme
-    }
 
     var body: some Scene {
         WindowGroup {
             MainView(controller: controller)
                 .frame(minWidth: 1220, minHeight: 720)
-                .preferredColorScheme(preferredScheme)
                 .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
         }
         .defaultSize(width: 1460, height: 880)
 
         Settings {
             MTSettingsView()
-                .preferredColorScheme(preferredScheme)
                 .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
         }
     }
@@ -215,6 +232,8 @@ struct MTSettingsView: View {
         .formStyle(.grouped)
         .frame(width: 430, height: 220)
         .padding(8)
+        .onAppear { mtApplyAppearance(appearance) }
+        .onChange(of: appearance) { _, newValue in mtApplyAppearance(newValue) }
     }
 }
 
@@ -275,7 +294,10 @@ struct MainView: View {
             Divider()
             status
         }
+        .transaction { transaction in transaction.animation = nil }
         .environment(\.locale, Locale(identifier: language == "tr" ? "tr_TR" : "en_US"))
+        .onAppear { mtApplyAppearance(appearance) }
+        .onChange(of: appearance) { _, newValue in mtApplyAppearance(newValue) }
         .onChange(of: controller.scanVersion) { _, _ in
             selectedID = nil
             hoveredID = nil
