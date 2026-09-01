@@ -343,7 +343,7 @@ struct MTTreemap: View {
                 let node = nodes[activeID]
                 Image(systemName: node.isDirectory ? "folder.fill" : "doc.fill")
                     .foregroundStyle(node.isDirectory ? Color.blue : Color.secondary)
-                Text(node.path)
+                Text(mtResolvedPath(activeID, nodes: nodes))
                     .font(.caption2)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -351,14 +351,12 @@ struct MTTreemap: View {
                 Text(mtBytes(node.allocatedSize))
                     .font(.caption2.weight(.semibold))
                     .monospacedDigit()
-                Text("•")
-                    .foregroundStyle(Color.secondary)
+                Text("•").foregroundStyle(Color.secondary)
                 Text("\(node.fileCount.formatted()) \(mtL("files"))")
                     .font(.caption2)
                     .foregroundStyle(Color.secondary)
             } else {
-                Image(systemName: "scope")
-                    .foregroundStyle(Color.secondary)
+                Image(systemName: "scope").foregroundStyle(Color.secondary)
                 Text(rootPath)
                     .font(.caption2)
                     .foregroundStyle(Color.secondary)
@@ -415,9 +413,7 @@ private struct MTTreemapViewport: View {
             MTSurface(nodes: nodes, model: model, renderToken: renderToken,
                       selectedID: $selectedID, hoveredID: $hoveredID)
                 .onAppear { rebuildIfNeeded(key: key, size: size) }
-                .onChange(of: key) { _, newKey in
-                    rebuildIfNeeded(key: newKey, size: size)
-                }
+                .onChange(of: key) { _, newKey in rebuildIfNeeded(key: newKey, size: size) }
         }
     }
 
@@ -516,9 +512,7 @@ private struct MTBaseCanvas: View, Equatable {
                     let title = Text(mtEllipsize(cell.label, maxCharacters: maxChars))
                         .font(.system(size: cell.rect.width > 110 && cell.rect.height > 38 ? 9 : 8, weight: .semibold))
                         .foregroundStyle(Color.white)
-                    context.draw(title,
-                                 at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 2.5),
-                                 anchor: .topLeading)
+                    context.draw(title, at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 2.5), anchor: .topLeading)
                     if cell.rect.width > 105 && cell.rect.height > 43 {
                         let sizeText = mtBytes(cell.representedAllocated)
                         let details = cell.representedFiles > 1
@@ -527,9 +521,7 @@ private struct MTBaseCanvas: View, Equatable {
                         let sub = Text(details)
                             .font(.system(size: 7.5))
                             .foregroundStyle(Color.white.opacity(0.82))
-                        context.draw(sub,
-                                     at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 14.5),
-                                     anchor: .topLeading)
+                        context.draw(sub, at: CGPoint(x: cell.rect.minX + 3.5, y: cell.rect.minY + 14.5), anchor: .topLeading)
                     }
                 }
             }
@@ -537,17 +529,14 @@ private struct MTBaseCanvas: View, Equatable {
             for frame in model.frames {
                 guard nodes.indices.contains(frame.nodeID), mtRectFinite(frame.rect) else { continue }
                 if let header = frame.headerRect, mtRectFinite(header) {
-                    context.fill(Path(header),
-                                 with: .color(Color.black.opacity(frame.depth == 0 ? 0.48 : 0.34)))
+                    context.fill(Path(header), with: .color(Color.black.opacity(frame.depth == 0 ? 0.48 : 0.34)))
                     let node = nodes[frame.nodeID]
                     let fullLabel = "\(node.name) (\(mtBytes(node.allocatedSize)))"
                     let maxChars = max(5, Int(header.width / 5.7))
                     let label = Text(mtEllipsize(fullLabel, maxCharacters: maxChars))
                         .font(.system(size: frame.depth <= 1 ? 8.5 : 8, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(0.94))
-                    context.draw(label,
-                                 at: CGPoint(x: header.minX + 3.5, y: header.minY + 0.5),
-                                 anchor: .topLeading)
+                    context.draw(label, at: CGPoint(x: header.minX + 3.5, y: header.minY + 0.5), anchor: .topLeading)
                 }
                 context.stroke(Path(frame.rect),
                                with: .color(Color.white.opacity(frame.depth == 0 ? 0.30 : 0.13)),
@@ -577,8 +566,7 @@ private struct MTSurface: View {
                 MTBaseCanvas(nodes: nodes, model: model, renderToken: renderToken, colorScheme: colorScheme)
                     .equatable()
 
-                selectionOverlay
-                    .allowsHitTesting(false)
+                selectionOverlay.allowsHitTesting(false)
 
                 Color.clear
                     .contentShape(Rectangle())
@@ -616,23 +604,19 @@ private struct MTSurface: View {
                     }
                     .contextMenu {
                         if let id = localHoveredNodeID, nodes.indices.contains(id) {
-                            MTFileContextMenu(node: nodes[id])
+                            MTFileContextMenu(node: nodes[id], resolvedPath: mtResolvedPath(id, nodes: nodes))
                         }
                     }
 
                 if let frameIndex = hoveredFrameIndex, model.frames.indices.contains(frameIndex) {
-                    folderHoverCard(model.frames[frameIndex], proxy.size)
-                        .allowsHitTesting(false)
+                    folderHoverCard(model.frames[frameIndex], proxy.size).allowsHitTesting(false)
                 } else if let index = hoveredCellIndex, model.cells.indices.contains(index) {
-                    hoverCard(model.cells[index], proxy.size)
-                        .allowsHitTesting(false)
+                    hoverCard(model.cells[index], proxy.size).allowsHitTesting(false)
                 }
             }
             .clipped()
         }
-        .onDisappear {
-            hoverPublishTask?.cancel()
-        }
+        .onDisappear { hoverPublishTask?.cancel() }
     }
 
     private var selectionOverlay: some View {
@@ -719,7 +703,7 @@ private struct MTSurface: View {
                 info(mtL("Type"), typeLabel)
             }
             .font(.caption2)
-            Text(node.path)
+            Text(mtResolvedPath(node.id, nodes: nodes))
                 .font(.caption2).foregroundStyle(Color.secondary)
                 .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
         }
