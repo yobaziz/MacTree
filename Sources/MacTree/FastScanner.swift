@@ -356,14 +356,11 @@ actor MTFastScanner {
     }
 
     private func shouldSkip(path: String, rootPath: String) -> Bool {
-        if rootPath == "/" {
-            if path == "/Volumes" || path.hasPrefix("/Volumes/") { return true }
-            if path == "/dev" || path.hasPrefix("/dev/") { return true }
-            if path == "/System/Volumes" || path.hasPrefix("/System/Volumes/") { return true }
-        }
-        if path.contains("/Library/CloudStorage") { return true }
-        if path.contains("/Library/Mobile Documents") { return true }
-        if path.contains("/Library/Application Support/CloudDocs") { return true }
+        guard rootPath == "/" else { return false }
+        if path == "/Volumes" || path.hasPrefix("/Volumes/") { return true }
+        if path == "/dev" || path.hasPrefix("/dev/") { return true }
+        // APFS system volume mirrors would duplicate data already visible elsewhere.
+        if path == "/System/Volumes" || path.hasPrefix("/System/Volumes/") { return true }
         return false
     }
 }
@@ -408,7 +405,6 @@ final class MTFastController: ObservableObject {
     func chooseFolder() {
         let panel = NSOpenPanel()
         panel.title = mtL("Choose Folder…")
-        panel.message = "iCloud and File Provider folders are skipped automatically."
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
