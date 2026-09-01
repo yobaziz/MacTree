@@ -92,7 +92,6 @@ actor MTFastScanner {
                 var nodeModified = entry.modifiedTime
                 let nodeFiles: UInt64 = isDirectory ? 0 : 1
 
-                // A corrupt/shifted metadata record must never poison the whole tree.
                 if !isDirectory && (nodeAllocated > maxReasonableAllocated || nodeLogical > maxReasonableLogical) {
                     var info = stat()
                     if fullPath.withCString({ lstat($0, &info) }) == 0 {
@@ -185,8 +184,6 @@ actor MTFastScanner {
             }
         }
 
-        // Sort one folder at a time. This avoids allocating million-element
-        // sortNames/sortSizes mirrors of the entire tree.
         for index in builders.indices where !builders[index].children.isEmpty {
             let unsorted = builders[index].children
             let sorted = unsorted.sorted { leftID, rightID in
@@ -224,7 +221,6 @@ actor MTFastScanner {
                           logical: logical, allocated: allocated, elapsed: elapsed)
     }
 
-    // Returns false only when the directory cannot use the bulk API at all.
     private func enumerateBulk(path: String, buffer: inout [UInt8], consume: (BulkEntry) -> Bool) -> Bool {
         let fd = path.withCString { Darwin.open($0, O_RDONLY) }
         guard fd >= 0 else { return true }
@@ -359,7 +355,6 @@ actor MTFastScanner {
         guard rootPath == "/" else { return false }
         if path == "/Volumes" || path.hasPrefix("/Volumes/") { return true }
         if path == "/dev" || path.hasPrefix("/dev/") { return true }
-        // APFS system volume mirrors would duplicate data already visible elsewhere.
         if path == "/System/Volumes" || path.hasPrefix("/System/Volumes/") { return true }
         return false
     }
@@ -431,12 +426,8 @@ final class MTFastController: ObservableObject {
     }
 
     func openFullDiskAccess() {
-        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-                NSWorkspace.shared.open(url)
-            }
-        }
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func start() {
@@ -486,7 +477,6 @@ final class MTFastController: ObservableObject {
                 self.refreshFullDiskAccess()
                 self.scanVersion += 1
             } catch is CancellationError {
-                // Normal stop action.
             } catch {
                 if !Task.isCancelled { self.errorMessage = error.localizedDescription }
             }
