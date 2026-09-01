@@ -36,14 +36,16 @@ struct MainView: View {
                         selectedID: $selectedID,
                         hoveredID: $hoveredID
                     )
-                    .frame(minWidth: 690, idealWidth: 900)
+                    .frame(minWidth: 520, idealWidth: 820, maxWidth: .infinity)
+                    .clipped()
 
                     MTExtensionPane(
                         nodes: controller.nodes,
                         scanVersion: controller.scanVersion,
                         totalAllocated: controller.allocated
                     )
-                    .frame(minWidth: 430, idealWidth: 540)
+                    .frame(minWidth: 360, idealWidth: 520, maxWidth: .infinity)
+                    .clipped()
                 }
                 .frame(minHeight: 290)
 
