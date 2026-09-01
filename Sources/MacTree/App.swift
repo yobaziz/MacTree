@@ -216,12 +216,9 @@ struct MTSettingsView: View {
                 }
 
                 Picker(mtL("Appearance"), selection: $appearance) {
-                    Label(mtL("System"), systemImage: "circle.lefthalf.filled")
-                        .tag(MTAppearanceChoice.system.rawValue)
-                    Label(mtL("Light"), systemImage: "sun.max.fill")
-                        .tag(MTAppearanceChoice.light.rawValue)
-                    Label(mtL("Dark"), systemImage: "moon.fill")
-                        .tag(MTAppearanceChoice.dark.rawValue)
+                    Label(mtL("System"), systemImage: "circle.lefthalf.filled").tag(MTAppearanceChoice.system.rawValue)
+                    Label(mtL("Light"), systemImage: "sun.max.fill").tag(MTAppearanceChoice.light.rawValue)
+                    Label(mtL("Dark"), systemImage: "moon.fill").tag(MTAppearanceChoice.dark.rawValue)
                 }
             }
 
@@ -367,12 +364,9 @@ struct MainView: View {
             Divider()
 
             Picker(mtL("Appearance"), selection: $appearance) {
-                Label(mtL("System"), systemImage: "circle.lefthalf.filled")
-                    .tag(MTAppearanceChoice.system.rawValue)
-                Label(mtL("Light"), systemImage: "sun.max.fill")
-                    .tag(MTAppearanceChoice.light.rawValue)
-                Label(mtL("Dark"), systemImage: "moon.fill")
-                    .tag(MTAppearanceChoice.dark.rawValue)
+                Label(mtL("System"), systemImage: "circle.lefthalf.filled").tag(MTAppearanceChoice.system.rawValue)
+                Label(mtL("Light"), systemImage: "sun.max.fill").tag(MTAppearanceChoice.light.rawValue)
+                Label(mtL("Dark"), systemImage: "moon.fill").tag(MTAppearanceChoice.dark.rawValue)
             }
 
             Divider()
@@ -478,7 +472,8 @@ struct MainView: View {
             let activeID = hoveredID ?? selectedID
             if let activeID, controller.nodes.indices.contains(activeID) {
                 let node = controller.nodes[activeID]
-                Text((hoveredID != nil ? mtL("Hover") : mtL("Selected")) + ": " + node.path + "   " + mtBytes(node.allocatedSize))
+                let resolvedPath = mtResolvedPath(activeID, nodes: controller.nodes)
+                Text((hoveredID != nil ? mtL("Hover") : mtL("Selected")) + ": " + resolvedPath + "   " + mtBytes(node.allocatedSize))
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)
             }
