@@ -135,6 +135,35 @@ struct MTFileContextMenu: View {
     }
 }
 
+private struct MTTreeColumns: Equatable {
+    let width: CGFloat
+    let name: CGFloat
+    let size: CGFloat
+    let allocated: CGFloat
+    let files: CGFloat
+    let disk: CGFloat
+    let modified: CGFloat
+    let path: CGFloat
+    let showModified: Bool
+    let showPath: Bool
+
+    init(width: CGFloat) {
+        self.width = max(480, width)
+        showModified = width >= 760
+        showPath = width >= 980
+
+        size = 86
+        allocated = 88
+        files = 68
+        disk = 116
+        modified = showModified ? 132 : 0
+        path = showPath ? max(150, width * 0.19) : 0
+
+        let fixed = size + allocated + files + disk + modified + path
+        name = max(190, self.width - fixed)
+    }
+}
+
 struct MTTreePane: View {
     let nodes: [MTNode]
     let rootID: Int
@@ -149,62 +178,74 @@ struct MTTreePane: View {
     @State private var hoverPublishTask: Task<Void, Never>?
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        ForEach(displayRows) { row in
-                            if nodes.indices.contains(row.id) {
-                                let node = nodes[row.id]
-                                MTTreeRow(
-                                    node: node,
-                                    depth: row.depth,
-                                    total: max(totalAllocated, 1),
-                                    isExpanded: model.expanded.contains(node.id),
-                                    isSelected: selectedID == node.id,
-                                    isHovered: visibleHoverID == node.id,
-                                    toggle: { model.toggle(node.id) },
-                                    select: { selectedID = node.id },
-                                    hover: { inside in handleHover(node.id, inside: inside) },
-                                    open: {
-                                        selectedID = node.id
-                                        if node.isDirectory && !node.children.isEmpty { model.toggle(node.id) }
-                                    }
-                                )
-                                .equatable()
-                                .id(node.id)
+        GeometryReader { geometry in
+            let columns = MTTreeColumns(width: geometry.size.width)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            ForEach(displayRows) { row in
+                                if nodes.indices.contains(row.id) {
+                                    let node = nodes[row.id]
+                                    MTTreeRow(
+                                        node: node,
+                                        depth: row.depth,
+                                        total: max(totalAllocated, 1),
+                                        columns: columns,
+                                        isExpanded: model.expanded.contains(node.id),
+                                        isSelected: selectedID == node.id,
+                                        isHovered: visibleHoverID == node.id,
+                                        toggle: { model.toggle(node.id) },
+                                        select: { selectedID = node.id },
+                                        hover: { inside in handleHover(node.id, inside: inside) },
+                                        open: {
+                                            selectedID = node.id
+                                            if node.isDirectory && !node.children.isEmpty { model.toggle(node.id) }
+                                        }
+                                    )
+                                    .equatable()
+                                    .id(node.id)
+                                }
                             }
+                        } header: {
+                            treeHeader(columns)
                         }
-                    } header: {
-                        HStack(spacing: 0) {
-                            header("Name", 330, .leading)
-                            header("Size", 105, .trailing)
-                            header("Allocated", 105, .trailing)
-                            header("Files", 90, .trailing)
-                            header("% Disk", 145, .leading)
-                            header("Modified", 165, .leading)
-                            header("Path", 390, .leading)
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.secondary)
-                        .padding(.vertical, 7)
-                        .background(.bar)
                     }
+                    .frame(width: columns.width, alignment: .topLeading)
                 }
-                .frame(minWidth: 1280, alignment: .topLeading)
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+                .clipped()
+                .onAppear { model.sync(nodes: nodes, rootID: rootID, version: scanVersion) }
+                .onChange(of: scanVersion) { _, value in
+                    model.sync(nodes: nodes, rootID: rootID, version: value)
+                }
+                .onChange(of: selectedID) { _, newID in
+                    guard searchModel.query.isEmpty, let newID else { return }
+                    model.reveal(newID)
+                    DispatchQueue.main.async { proxy.scrollTo(newID, anchor: .center) }
+                }
+                .onDisappear { hoverPublishTask?.cancel() }
             }
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
-            .onAppear { model.sync(nodes: nodes, rootID: rootID, version: scanVersion) }
-            .onChange(of: scanVersion) { _, value in
-                model.sync(nodes: nodes, rootID: rootID, version: value)
-            }
-            .onChange(of: selectedID) { _, newID in
-                guard searchModel.query.isEmpty, let newID else { return }
-                model.reveal(newID)
-                DispatchQueue.main.async { proxy.scrollTo(newID, anchor: .center) }
-            }
-            .onDisappear { hoverPublishTask?.cancel() }
         }
+        .clipped()
+    }
+
+    @ViewBuilder
+    private func treeHeader(_ c: MTTreeColumns) -> some View {
+        HStack(spacing: 0) {
+            header("Name", c.name, .leading)
+            header("Size", c.size, .trailing)
+            header("Allocated", c.allocated, .trailing)
+            header("Files", c.files, .trailing)
+            header("% Disk", c.disk, .leading)
+            if c.showModified { header("Modified", c.modified, .leading) }
+            if c.showPath { header("Path", c.path, .leading) }
+        }
+        .frame(width: c.width, alignment: .leading)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(Color.secondary)
+        .padding(.vertical, 7)
+        .background(.bar)
     }
 
     private var displayRows: [MTVisibleRow] {
@@ -247,7 +288,10 @@ struct MTTreePane: View {
     }
 
     private func header(_ text: String, _ width: CGFloat, _ alignment: Alignment) -> some View {
-        Text(text).frame(width: width, alignment: alignment).padding(.horizontal, 6)
+        Text(text)
+            .padding(.horizontal, 5)
+            .frame(width: width, alignment: alignment)
+            .lineLimit(1)
     }
 }
 
@@ -255,6 +299,7 @@ private struct MTTreeRow: View, Equatable {
     let node: MTNode
     let depth: Int
     let total: UInt64
+    let columns: MTTreeColumns
     let isExpanded: Bool
     let isSelected: Bool
     let isHovered: Bool
@@ -272,6 +317,7 @@ private struct MTTreeRow: View, Equatable {
         lhs.node.modifiedTime == rhs.node.modifiedTime &&
         lhs.depth == rhs.depth &&
         lhs.total == rhs.total &&
+        lhs.columns == rhs.columns &&
         lhs.isExpanded == rhs.isExpanded &&
         lhs.isSelected == rhs.isSelected &&
         lhs.isHovered == rhs.isHovered
@@ -279,56 +325,63 @@ private struct MTTreeRow: View, Equatable {
 
     var body: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 5) {
-                Color.clear.frame(width: CGFloat(depth) * 17)
+            HStack(spacing: 4) {
+                Color.clear.frame(width: min(CGFloat(depth) * 15, max(0, columns.name * 0.45)))
                 if node.isDirectory && !node.children.isEmpty {
                     Button(action: toggle) {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                             .font(.caption2.weight(.bold))
-                            .frame(width: 14)
+                            .frame(width: 13)
                     }
                     .buttonStyle(.plain)
                 } else {
-                    Color.clear.frame(width: 14)
+                    Color.clear.frame(width: 13)
                 }
 
                 Image(systemName: node.isDirectory ? "folder.fill" : "doc.fill")
                     .foregroundStyle(node.isDirectory ? Color.blue : Color.secondary)
-                    .frame(width: 17)
+                    .frame(width: 16)
 
-                Text(node.name).lineLimit(1).truncationMode(.middle)
+                Text(node.name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            .frame(width: 330, alignment: .leading)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 5)
+            .frame(width: columns.name, alignment: .leading)
 
-            cell(mtBytes(node.logicalSize), 105, .trailing)
-            cell(mtBytes(node.allocatedSize), 105, .trailing)
-            cell(node.fileCount.formatted(), 90, .trailing)
+            cell(mtBytes(node.logicalSize), columns.size, .trailing)
+            cell(mtBytes(node.allocatedSize), columns.allocated, .trailing)
+            cell(node.fileCount.formatted(), columns.files, .trailing)
 
-            HStack(spacing: 7) {
+            HStack(spacing: 5) {
                 let ratio = Double(node.allocatedSize) / Double(max(total, 1))
-                ProgressView(value: ratio).frame(width: 66)
+                ProgressView(value: ratio)
+                    .frame(maxWidth: 52)
                 Text(ratio, format: .percent.precision(.fractionLength(1)))
                     .monospacedDigit()
-                    .frame(width: 58, alignment: .trailing)
+                    .frame(width: 50, alignment: .trailing)
             }
-            .frame(width: 145, alignment: .leading)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 5)
+            .frame(width: columns.disk, alignment: .leading)
 
-            let modified = node.modifiedTime > 0
-                ? Date(timeIntervalSince1970: node.modifiedTime).formatted(date: .numeric, time: .shortened)
-                : "—"
-            cell(modified, 165, .leading)
+            if columns.showModified {
+                let modified = node.modifiedTime > 0
+                    ? Date(timeIntervalSince1970: node.modifiedTime).formatted(date: .numeric, time: .shortened)
+                    : "—"
+                cell(modified, columns.modified, .leading)
+            }
 
-            Text(node.path)
-                .foregroundStyle(Color.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(width: 390, alignment: .leading)
-                .padding(.horizontal, 6)
+            if columns.showPath {
+                Text(node.path)
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 5)
+                    .frame(width: columns.path, alignment: .leading)
+            }
         }
+        .frame(width: columns.width, height: 29, alignment: .leading)
         .font(.callout)
-        .frame(height: 29)
         .background(rowBackground)
         .contentShape(Rectangle())
         .onHover(perform: hover)
@@ -347,8 +400,8 @@ private struct MTTreeRow: View, Equatable {
         Text(text)
             .monospacedDigit()
             .lineLimit(1)
+            .padding(.horizontal, 5)
             .frame(width: width, alignment: alignment)
-            .padding(.horizontal, 6)
     }
 }
 
@@ -362,6 +415,12 @@ struct MTExtensionStat: Identifiable, Hashable, Sendable {
     let categoryRaw: String
 
     var id: String { extensionKey }
+}
+
+private struct MTExtensionBucket: Sendable {
+    var logical: UInt64 = 0
+    var allocated: UInt64 = 0
+    var files: UInt64 = 0
 }
 
 @MainActor
@@ -386,39 +445,27 @@ final class MTExtensionIndexModel: ObservableObject {
         isIndexing = true
         task = Task { [weak self] in
             let result = await Task.detached(priority: .utility) {
-                struct Bucket {
-                    var logical: UInt64 = 0
-                    var allocated: UInt64 = 0
-                    var files: UInt64 = 0
-                    var categoryWeights: [String: UInt64] = [:]
-                }
+                var buckets: [String: MTExtensionBucket] = [:]
+                buckets.reserveCapacity(2200)
 
-                var buckets: [String: Bucket] = [:]
-                buckets.reserveCapacity(1800)
-
-                for node in snapshot where !node.isDirectory {
+                for node in snapshot {
                     if Task.isCancelled { return [MTExtensionStat]() }
-                    let rawExtension = (node.name as NSString).pathExtension.lowercased()
-                    let key = rawExtension.isEmpty ? "(no extension)" : "." + rawExtension
-                    var bucket = buckets[key] ?? Bucket()
+                    guard !node.isDirectory else { continue }
+                    let key = mtFastExtensionKey(node.name)
+                    var bucket = buckets[key] ?? MTExtensionBucket()
                     bucket.logical = mtSafeAdd(bucket.logical, node.logicalSize)
                     bucket.allocated = mtSafeAdd(bucket.allocated, node.allocatedSize)
                     bucket.files = mtSafeAdd(bucket.files, 1)
-                    let category = mtDirectCategory(node).rawValue
-                    bucket.categoryWeights[category, default: 0] = mtSafeAdd(
-                        bucket.categoryWeights[category, default: 0], node.allocatedSize
-                    )
                     buckets[key] = bucket
                 }
 
                 return buckets.map { key, bucket in
-                    let category = bucket.categoryWeights.max(by: { $0.value < $1.value })?.key ?? MTCategory.other.rawValue
-                    return MTExtensionStat(
+                    MTExtensionStat(
                         extensionKey: key,
                         logicalSize: bucket.logical,
                         allocatedSize: bucket.allocated,
                         fileCount: bucket.files,
-                        categoryRaw: category
+                        categoryRaw: mtExtensionCategory(key).rawValue
                     )
                 }
                 .sorted {
@@ -436,6 +483,62 @@ final class MTExtensionIndexModel: ObservableObject {
     deinit { task?.cancel() }
 }
 
+private func mtFastExtensionKey(_ name: String) -> String {
+    guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return "(no extension)" }
+    let after = name.index(after: dot)
+    guard after < name.endIndex else { return "(no extension)" }
+    let raw = name[after...]
+    guard raw.count <= 32 else { return "(no extension)" }
+    return "." + raw.lowercased()
+}
+
+private func mtExtensionCategory(_ key: String) -> MTCategory {
+    let ext = key.hasPrefix(".") ? String(key.dropFirst()) : ""
+    switch ext {
+    case "app", "appex", "xpc": return .application
+    case "mp4", "mov", "mkv", "avi", "webm", "m4v", "mpeg", "mpg": return .video
+    case "jpg", "jpeg", "png", "heic", "gif", "webp", "tiff", "bmp", "svg", "icns": return .image
+    case "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "dmg", "pkg", "iso", "jar": return .archive
+    case "mp3", "aac", "m4a", "wav", "flac", "ogg", "aiff", "bank": return .audio
+    case "pdf", "doc", "docx", "pages", "txt", "rtf", "md", "csv", "xls", "xlsx", "ppt", "pptx": return .document
+    case "swift", "c", "cpp", "cc", "h", "hpp", "js", "ts", "py", "java", "kt", "rs", "go", "rb", "php", "css", "html", "sh": return .code
+    case "db", "sqlite", "sqlite3", "realm", "mdb": return .database
+    case "ini", "cfg", "conf", "plist", "yaml", "yml", "toml", "json", "xml": return .config
+    case "log": return .logs
+    case "pak", "vpk", "wad", "pck", "bundle", "assets", "asset", "res", "ress", "resource", "dat", "bin", "obb", "unity3d": return .gameData
+    case "dylib", "so", "framework", "kext", "metallib", "car": return .system
+    default: return .other
+    }
+}
+
+private struct MTExtensionColumns: Equatable {
+    let width: CGFloat
+    let color: CGFloat = 18
+    let ext: CGFloat
+    let type: CGFloat
+    let percent: CGFloat
+    let logical: CGFloat
+    let allocated: CGFloat
+    let files: CGFloat
+    let showType: Bool
+    let showLogical: Bool
+
+    init(width: CGFloat) {
+        self.width = max(340, width)
+        showType = width >= 405
+        showLogical = width >= 560
+
+        ext = 78
+        percent = 65
+        allocated = 90
+        files = 72
+        logical = showLogical ? 86 : 0
+
+        let fixed = color + ext + percent + allocated + files + logical
+        type = showType ? max(0, self.width - fixed) : 0
+    }
+}
+
 struct MTExtensionPane: View {
     let nodes: [MTNode]
     let scanVersion: Int
@@ -445,94 +548,110 @@ struct MTExtensionPane: View {
     @State private var selectedExtension: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 7) {
-                Image(systemName: "list.bullet.rectangle")
-                    .foregroundStyle(Color.secondary)
-                Text("File Types / Extensions")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-                if model.isIndexing {
-                    ProgressView().controlSize(.mini)
-                    Text("Indexing…")
-                        .font(.caption2)
+        GeometryReader { geometry in
+            let columns = MTExtensionColumns(width: geometry.size.width)
+            VStack(spacing: 0) {
+                HStack(spacing: 7) {
+                    Image(systemName: "list.bullet.rectangle")
                         .foregroundStyle(Color.secondary)
-                } else {
-                    Text("\(model.stats.count.formatted()) extensions")
-                        .font(.caption2)
-                        .foregroundStyle(Color.secondary)
-                }
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(.bar)
-
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        ForEach(model.stats) { stat in
-                            MTExtensionRow(
-                                stat: stat,
-                                total: max(totalAllocated, 1),
-                                selected: selectedExtension == stat.extensionKey
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedExtension = selectedExtension == stat.extensionKey ? nil : stat.extensionKey
-                            }
-                        }
-                    } header: {
-                        HStack(spacing: 0) {
-                            extensionHeader("", 22, .center)
-                            extensionHeader("Extension", 88, .leading)
-                            extensionHeader("File Type", 130, .leading)
-                            extensionHeader("Percent", 82, .trailing)
-                            extensionHeader("Size", 96, .trailing)
-                            extensionHeader("Allocated", 100, .trailing)
-                            extensionHeader("Files", 88, .trailing)
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.secondary)
-                        .padding(.vertical, 6)
-                        .background(.bar)
+                    Text("File Types / Extensions")
+                        .font(.callout.weight(.semibold))
+                    Spacer()
+                    if model.isIndexing {
+                        ProgressView().controlSize(.mini)
+                        Text("Indexing…")
+                            .font(.caption2)
+                            .foregroundStyle(Color.secondary)
+                    } else {
+                        Text("\(model.stats.count.formatted()) extensions")
+                            .font(.caption2)
+                            .foregroundStyle(Color.secondary)
                     }
                 }
-                .frame(minWidth: 606, alignment: .topLeading)
-            }
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
-
-            if let selectedExtension {
-                HStack(spacing: 5) {
-                    Image(systemName: "scope")
-                    Text(selectedExtension)
-                        .fontWeight(.semibold)
-                    Text("selected")
-                        .foregroundStyle(Color.secondary)
-                    Spacer()
-                    Button("Clear") { self.selectedExtension = nil }
-                        .buttonStyle(.plain)
-                }
-                .font(.caption2)
                 .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(Color.accentColor.opacity(0.10))
+                .frame(height: 28)
+                .background(.bar)
+
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            ForEach(model.stats) { stat in
+                                MTExtensionRow(
+                                    stat: stat,
+                                    total: max(totalAllocated, 1),
+                                    columns: columns,
+                                    selected: selectedExtension == stat.extensionKey
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedExtension = selectedExtension == stat.extensionKey ? nil : stat.extensionKey
+                                }
+                            }
+                        } header: {
+                            extensionHeader(columns)
+                        }
+                    }
+                    .frame(width: columns.width, alignment: .topLeading)
+                }
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+                .clipped()
+
+                if let selectedExtension {
+                    HStack(spacing: 5) {
+                        Image(systemName: "scope")
+                        Text(selectedExtension).fontWeight(.semibold)
+                        Text("selected").foregroundStyle(Color.secondary)
+                        Spacer()
+                        Button("Clear") { self.selectedExtension = nil }
+                            .buttonStyle(.plain)
+                    }
+                    .font(.caption2)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(Color.accentColor.opacity(0.10))
+                }
             }
+            .frame(width: columns.width)
+            .clipped()
         }
         .onAppear { model.sync(nodes: nodes, version: scanVersion) }
         .onChange(of: scanVersion) { _, value in
             selectedExtension = nil
             model.sync(nodes: nodes, version: value)
         }
+        .clipped()
     }
 
-    private func extensionHeader(_ text: String, _ width: CGFloat, _ alignment: Alignment) -> some View {
-        Text(text).frame(width: width, alignment: alignment).padding(.horizontal, 4)
+    @ViewBuilder
+    private func extensionHeader(_ c: MTExtensionColumns) -> some View {
+        HStack(spacing: 0) {
+            extHeader("", c.color, .center)
+            extHeader("Extension", c.ext, .leading)
+            if c.showType { extHeader("File Type", c.type, .leading) }
+            extHeader("Percent", c.percent, .trailing)
+            if c.showLogical { extHeader("Size", c.logical, .trailing) }
+            extHeader("Allocated", c.allocated, .trailing)
+            extHeader("Files", c.files, .trailing)
+        }
+        .frame(width: c.width, alignment: .leading)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(Color.secondary)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    private func extHeader(_ text: String, _ width: CGFloat, _ alignment: Alignment) -> some View {
+        Text(text)
+            .padding(.horizontal, 4)
+            .frame(width: width, alignment: alignment)
+            .lineLimit(1)
     }
 }
 
 private struct MTExtensionRow: View {
     let stat: MTExtensionStat
     let total: UInt64
+    let columns: MTExtensionColumns
     let selected: Bool
 
     private var category: MTCategory {
@@ -548,36 +667,34 @@ private struct MTExtensionRow: View {
             RoundedRectangle(cornerRadius: 1.5)
                 .fill(category.color)
                 .frame(width: 8, height: 20)
-                .frame(width: 22)
+                .frame(width: columns.color)
 
-            extensionCell(stat.extensionKey, 88, .leading, monospaced: true)
-            extensionCell(extensionTypeName(stat.extensionKey, category: category), 130, .leading)
-            extensionCell(ratio.formatted(.percent.precision(.fractionLength(1))), 82, .trailing, monospaced: true)
-            extensionCell(mtBytes(stat.logicalSize), 96, .trailing, monospaced: true)
-            extensionCell(mtBytes(stat.allocatedSize), 100, .trailing, monospaced: true)
-            extensionCell(stat.fileCount.formatted(), 88, .trailing, monospaced: true)
+            extensionCell(stat.extensionKey, columns.ext, .leading, monospaced: true)
+            if columns.showType {
+                extensionCell(extensionTypeName(stat.extensionKey, category: category), columns.type, .leading)
+            }
+            extensionCell(ratio.formatted(.percent.precision(.fractionLength(1))), columns.percent, .trailing, monospaced: true)
+            if columns.showLogical {
+                extensionCell(mtBytes(stat.logicalSize), columns.logical, .trailing, monospaced: true)
+            }
+            extensionCell(mtBytes(stat.allocatedSize), columns.allocated, .trailing, monospaced: true)
+            extensionCell(stat.fileCount.formatted(), columns.files, .trailing, monospaced: true)
         }
+        .frame(width: columns.width, height: 27, alignment: .leading)
         .font(.callout)
-        .frame(height: 27)
         .background(selected ? Color.accentColor.opacity(0.30) : Color.clear)
-        .overlay(alignment: .bottom) {
-            Divider().opacity(0.22)
-        }
+        .overlay(alignment: .bottom) { Divider().opacity(0.22) }
         .help("\(stat.extensionKey) • \(extensionTypeName(stat.extensionKey, category: category)) • \(mtBytes(stat.allocatedSize)) allocated • \(stat.fileCount.formatted()) files")
     }
 
     private func extensionCell(_ text: String, _ width: CGFloat, _ alignment: Alignment, monospaced: Bool = false) -> some View {
         Group {
-            if monospaced {
-                Text(text).monospacedDigit()
-            } else {
-                Text(text)
-            }
+            if monospaced { Text(text).monospacedDigit() } else { Text(text) }
         }
         .lineLimit(1)
         .truncationMode(.tail)
-        .frame(width: width, alignment: alignment)
         .padding(.horizontal, 4)
+        .frame(width: width, alignment: alignment)
     }
 
     private func extensionTypeName(_ key: String, category: MTCategory) -> String {
@@ -611,8 +728,7 @@ private struct MTExtensionRow: View {
         case "txt", "md", "rtf": return "Text Document"
         case "app": return "Application"
         case "": return key == "(no extension)" ? "No Extension" : "File"
-        default:
-            return category == .other ? "File" : category.rawValue
+        default: return category == .other ? "File" : category.rawValue
         }
     }
 }
