@@ -221,7 +221,7 @@ struct MainView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("mactree.language") private var language = MTLanguageChoice.english.rawValue
     @AppStorage("mactree.appearance") private var appearance = MTAppearanceChoice.system.rawValue
-    @StateObject private var controller = MTController()
+    @StateObject private var controller = MTFastController()
     @State private var selectedID: Int?
     @State private var hoveredID: Int?
 
