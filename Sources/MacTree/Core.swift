@@ -295,16 +295,14 @@ final class MTController: ObservableObject {
     }
 
     func refreshVolumeSpace() {
-        var fs = statfs()
-        let path = rootURL.path
-        guard path.withCString({ Darwin.statfs($0, &fs) }) == 0 else {
+        do {
+            let values = try rootURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey])
+            volumeTotal = values.volumeTotalCapacity.map { UInt64(max(0, $0)) } ?? 0
+            volumeFree = values.volumeAvailableCapacity.map { UInt64(max(0, $0)) } ?? 0
+        } catch {
             volumeTotal = 0
             volumeFree = 0
-            return
         }
-        let blockSize = UInt64(fs.f_bsize)
-        volumeTotal = mtSafeMultiply(UInt64(fs.f_blocks), blockSize)
-        volumeFree = mtSafeMultiply(UInt64(fs.f_bavail), blockSize)
     }
 
     func openFullDiskAccess() {
@@ -556,7 +554,7 @@ func mtSafeInset(_ rect: CGRect, _ amount: CGFloat) -> CGRect {
 }
 
 func mtSafeAdd(_ a: UInt64, _ b: UInt64) -> UInt64 {
-    let (value, overflow) = a.addingReportingOverflow(b)
+    let (value, overflow) = a.addingReportingOverflow(by: b)
     return overflow ? UInt64.max : value
 }
 
