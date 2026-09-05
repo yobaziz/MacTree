@@ -1,0 +1,58 @@
+name: Windows preview
+on:
+  push:
+    branches: [main, 'windows/**']
+    paths: ['windows/**', 'Resources/AppIcon.png', '.github/workflows/windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish self-contained x64 preview
+        run: dotnet publish windows/MacTree.Windows -c Release -r win-x64 --self-contained true -o dist/windows
+      - name: Scanner correctness checks
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/windows/MacTree.Windows.exe -ArgumentList '--self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path self-test-error.txt) { Get-Content self-test-error.txt }
+            throw 'Scanner checks failed'
+          }
+      - name: Navigation and populated map checks
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/windows/MacTree.Windows.exe -ArgumentList '--ui-test' -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw 'UI checks timed out' }
+          if ($p.ExitCode -ne 0 -or (Test-Path ui-test-error.txt) -or -not (Test-Path ui-test-success.txt)) {
+            if (Test-Path ui-test-error.txt) { Get-Content ui-test-error.txt }
+            throw 'UI checks failed'
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-UI-checks
+          path: |
+            ui-*.png
+            ui-test-*.txt
+      - name: WPF window smoke check
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/windows/MacTree.Windows.exe -PassThru
+          try {
+            if (-not $p.WaitForInputIdle(20000)) { throw 'Window did not become idle' }
+            $p.Refresh()
+            if ($p.HasExited -or $p.MainWindowHandle -eq 0) { throw 'No application window' }
+            $null = $p.CloseMainWindow()
+            if (-not $p.WaitForExit(10000)) { throw 'Window did not close' }
+          } finally { if (-not $p.HasExited) { $p.Kill() } }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacTree-Windows-x64
+          path: dist/windows/
+          if-no-files-found: error

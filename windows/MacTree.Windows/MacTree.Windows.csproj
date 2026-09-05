@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>0.1.0</Version>
+    <AssemblyName>MacTree.Windows</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup><Resource Include="../../Resources/AppIcon.png" Link="AppIcon.png" /></ItemGroup>
+</Project>
