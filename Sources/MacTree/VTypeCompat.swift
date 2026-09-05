@@ -11,6 +11,23 @@ extension UInt32 {
     }
 }
 
+private func mtPermissionError(_ error: NSError) -> Bool {
+    if error.domain == NSPOSIXErrorDomain && (error.code == Int(EACCES) || error.code == Int(EPERM)) {
+        return true
+    }
+    if error.domain == NSCocoaErrorDomain {
+        let permissionCodes: Set<Int> = [
+            CocoaError.Code.fileReadNoPermission.rawValue,
+            CocoaError.Code.fileWriteNoPermission.rawValue
+        ]
+        if permissionCodes.contains(error.code) { return true }
+    }
+    if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+        return mtPermissionError(underlying)
+    }
+    return false
+}
+
 // MARK: - File actions that do not require Finder Automation permission
 
 @MainActor
