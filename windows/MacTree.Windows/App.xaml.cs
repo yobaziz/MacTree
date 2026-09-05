@@ -12,6 +12,14 @@ public partial class App : Application
             catch (Exception ex) { File.WriteAllText("self-test-error.txt", ex.ToString()); Shutdown(1); }
             return;
         }
-        new MainWindow().Show();
+        var window = new MainWindow();
+        if (e.Args.Contains("--ui-test"))
+        {
+            window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() => {
+                try { window.RunUiChecks(); window.Close(); Shutdown(0); }
+                catch (Exception ex) { File.WriteAllText("ui-test-error.txt", ex.ToString()); window.Close(); Shutdown(1); }
+            }));
+        }
+        window.Show();
     }
 }

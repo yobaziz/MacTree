@@ -2,8 +2,16 @@ using System.Diagnostics;
 using System.IO;
 namespace MacTree.Windows;
 
-public sealed class Entry
+public sealed class Entry : System.ComponentModel.INotifyPropertyChanged
 {
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private bool expanded, selected;
+    public bool IsExpanded { get => expanded; set { expanded = value; PropertyChanged?.Invoke(this, new(nameof(IsExpanded))); } }
+    public bool IsSelected { get => selected; set { selected = value; PropertyChanged?.Invoke(this, new(nameof(IsSelected))); } }
+    private List<Entry>? folders;
+    public List<Entry> Folders => folders ??= Children.Where(x => x.IsDirectory).ToList();
+    public string Share => Parent is { Bytes: > 0 } p ? $"{100.0 * Bytes / p.Bytes:0.0}%" : "100%";
+    public string Coverage => Incomplete ? "Partial" : "";
     public required string Name { get; init; }
     public required string Path { get; init; }
     public bool IsDirectory { get; init; }

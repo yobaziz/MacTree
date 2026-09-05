@@ -39,3 +39,13 @@ before measuring against WizTree on the same disk. Keep normal UI non-elevated.
 `MacTree.Windows.exe --self-test` checks known nested totals, ordering, empty
 folders, cancellation, missing roots, and a junction cycle. CI also launches and
 closes a real WPF window. Manual UI/performance testing on user hardware is still needed.
+
+## Navigation and map update
+
+The folder tree opens automatically and follows navigation from the file list,
+map, and Up button. It shows folders only; files are listed on the right.
+The map renders nested folder headers and file-type colors, with a legend,
+hover path/size, and selection outlines. Small tails beyond 399 siblings are
+grouped with their summed sizes. Very small tiles and deep folders require
+drill-down. UI regression checks use a synthetic Steam/game hierarchy and
+export two screenshots; these are fixtures, not benchmark results.
