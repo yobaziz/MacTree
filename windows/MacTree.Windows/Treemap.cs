@@ -87,8 +87,17 @@ public sealed class Treemap : FrameworkElement
                     bool descend = n.IsDirectory && depth < 8 && box.Width > 95 && box.Height > 65 && tiles.Count < 6000;
                     if (descend)
                     {
-                        Label(n.Name + "  ·  " + n.Size, new Rect(box.X + 2, box.Y + 2, box.Width - 4, 22), Brushes.White);
-                        RenderChildren(n, new Rect(box.X + 3, box.Y + 26, box.Width - 6, box.Height - 29), depth + 1);
+                        var content = n;
+                        string title = n.Name;
+                        // Do not spend a header row on every single-child container.
+                        for (int chain = 0; chain < 32; chain++)
+                        {
+                            var positive = content.Children.Where(x => x.Bytes > 0).Take(2).ToArray();
+                            if (positive.Length != 1 || !positive[0].IsDirectory) break;
+                            content = positive[0]; title += " / " + content.Name;
+                        }
+                        Label(title + "  ·  " + n.Size, new Rect(box.X + 2, box.Y + 2, box.Width - 4, 22), Brushes.White);
+                        RenderChildren(content, new Rect(box.X + 3, box.Y + 26, box.Width - 6, box.Height - 29), depth + 1);
                     }
                     else Label(n.Name + "\n" + n.Size, box, Brushes.White);
                     return;

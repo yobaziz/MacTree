@@ -29,7 +29,7 @@ jobs:
         run: |
           $p = Start-Process dist/windows/MacTree.Windows.exe -ArgumentList '--ui-test' -PassThru
           if (-not $p.WaitForExit(60000)) { $p.Kill(); throw 'UI checks timed out' }
-          if ($p.ExitCode -ne 0) {
+          if ($p.ExitCode -ne 0 -or (Test-Path ui-test-error.txt) -or -not (Test-Path ui-test-success.txt)) {
             if (Test-Path ui-test-error.txt) { Get-Content ui-test-error.txt }
             throw 'UI checks failed'
           }
@@ -37,7 +37,9 @@ jobs:
         if: always()
         with:
           name: Windows-UI-checks
-          path: ui-*.png
+          path: |
+            ui-*.png
+            ui-test-*.txt
       - name: WPF window smoke check
         shell: pwsh
         run: |
