@@ -1,0 +1,77 @@
+name: Publish MacTree 1.0 Beta
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-beta.yml']
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: publish-mactree-v1-beta
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: MacTree-macOS
+          run-id: 33958260951
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Verify checksums
+        run: sha256sum -c dist/SHA256SUMS.txt
+      - name: Publish release and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'NOTES'
+          # MacTree 1.0 Beta
+          
+          MacTree is a native macOS disk-space analyzer inspired by WizTree. See which files and folders take up space, explore your storage visually, and find large items without digging through Finder.
+          
+          ## Features
+          - Interactive treemap showing files and folders by size.
+          - Expandable folder hierarchy and file-type breakdown.
+          - File and folder search.
+          - Logical and allocated sizes, file counts, and disk free-space information.
+          - Whole-disk or selected-folder scanning with progress and cancellation.
+          - Finder integration and file actions.
+          - English and Turkish interface with light, dark, and system appearance.
+          - New blue-folder application icon.
+          
+          ## Download and install
+          1. Download **MacTree.dmg** from the assets below.
+          2. Open the DMG and drag **MacTree** to **Applications**.
+          3. Launch the installed app and choose a disk or folder to scan.
+          
+          **Requirements:** macOS 15 or later. The universal app supports Apple Silicon and Intel Macs. Xcode is not required.
+          
+          ## Privacy and permissions
+          For whole-disk analysis, add the installed **/Applications/MacTree.app** in **System Settings → Privacy & Security → Full Disk Access**, then quit and reopen MacTree.
+          
+          MacTree no longer probes unrelated protected folders to guess its permission status. Unreadable folders are reported as incomplete coverage. macOS may still request access to other applications' data, and some system locations remain protected.
+          
+          ## Beta notes
+          This build is ad-hoc signed and is **not Apple-notarized**. macOS may require approval in Privacy & Security before opening it. Do not disable Gatekeeper. Updates may require renewed privacy approval.
+          
+          APFS snapshots, clones, hard links, and purgeable space can cause file totals to differ from physical disk usage. Treat this as a beta release.
+          
+          The release assets come from the successful macOS build of commit ca0d4c8757f676cfe2aebfe9e8bac06dd667428d. Compilation for arm64 and x86_64, signature verification, and DMG packaging passed.
+          
+          **Assets:** DMG installer, ZIP of the application, and SHA-256 checksums.
+          NOTES
+          if gh release view v1.0.0-beta.1 >/dev/null 2>&1; then
+            echo "Release already exists; leaving its assets unchanged."
+            exit 0
+          fi
+          gh release create v1.0.0-beta.1 \
+            --target ca0d4c8757f676cfe2aebfe9e8bac06dd667428d \
+            --title "MacTree 1.0 Beta" --prerelease \
+            --notes-file release-notes.md \
+            dist/MacTree.dmg dist/MacTree-app.zip dist/SHA256SUMS.txt
