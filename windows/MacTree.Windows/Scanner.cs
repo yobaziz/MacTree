@@ -15,6 +15,7 @@ public sealed class Entry : System.ComponentModel.INotifyPropertyChanged
     public required string Name { get; init; }
     public required string Path { get; init; }
     public bool IsDirectory { get; init; }
+    public bool IsGroup { get; init; }
     public Entry? Parent { get; init; }
     public List<Entry> Children { get; } = [];
     public long Bytes { get; set; }

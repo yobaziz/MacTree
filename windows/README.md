@@ -49,3 +49,15 @@ hover path/size, and selection outlines. Small tails beyond 399 siblings are
 grouped with their summed sizes. Very small tiles and deep folders require
 drill-down. UI regression checks use a synthetic Steam/game hierarchy and
 export two screenshots; these are fixtures, not benchmark results.
+
+## Readable folder breakdown and volume capacity
+
+The lower panel now shows one level at a time as ranked bars, with names in a
+separate column so their visibility does not depend on file size. Small items
+are summed into a named navigable group. Double-click a folder or group to
+explore it; Up returns to its parent. Hover shows the full name/path.
+
+Total, used and free capacity come from Windows DriveInfo (TotalSize and
+TotalFreeSpace), not from scanned logical file totals. Unsupported/unavailable
+volumes show an explicit unavailable state. The capacity bar always refers to
+the scanned drive, even while browsing one of its folders.

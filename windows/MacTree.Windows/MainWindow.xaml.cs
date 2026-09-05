@@ -12,6 +12,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent(); Location.Text = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        RefreshCapacity(Location.Text);
         Map.Navigate = ShowFolder;
         Map.Hover = text => MapDetail.Text = text;
         Map.Select = node => {
@@ -23,7 +24,7 @@ public partial class MainWindow : Window
     private void ChooseFolder(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog();
-        if (dialog.ShowDialog(this) == true) Location.Text = dialog.FolderName;
+        if (dialog.ShowDialog(this) == true) { Location.Text = dialog.FolderName; RefreshCapacity(Location.Text); }
     }
     private async void StartScan(object sender, RoutedEventArgs e)
     {
@@ -32,6 +33,7 @@ public partial class MainWindow : Window
         Scan.IsEnabled = Choose.IsEnabled = Location.IsEnabled = false; Stop.IsEnabled = true;
         Busy.Visibility = Visibility.Visible; Summary.Text = "Scanning…";
         string path = Location.Text;
+        RefreshCapacity(path);
         var progress = new Progress<ScanProgress>(p => {
             if (cancellation == source && !closed) Status.Text = $"{p.Files:N0} files · {p.Path}";
         });
@@ -51,6 +53,33 @@ public partial class MainWindow : Window
             if (!closed) { Scan.IsEnabled = Choose.IsEnabled = Location.IsEnabled = true; Stop.IsEnabled = false; Busy.Visibility = Visibility.Collapsed; }
         }
     }
+    private int capacityVersion;
+    private async void RefreshCapacity(string path)
+    {
+        int version = ++capacityVersion;
+        SetCapacity(null, 0, 0);
+        try
+        {
+            var info = await Task.Run(() => {
+                var drive = new DriveInfo(System.IO.Path.GetPathRoot(System.IO.Path.GetFullPath(path))!);
+                return (drive.Name, drive.TotalSize, drive.TotalFreeSpace);
+            });
+            if (!closed && version == capacityVersion) SetCapacity(info.Name, info.TotalSize, info.TotalFreeSpace);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        { if (!closed && version == capacityVersion) SetCapacity(null, 0, 0); }
+    }
+    internal void SetCapacity(string? name, long total, long free)
+    {
+        bool valid = name != null && total > 0 && free >= 0 && free <= total;
+        VolumeTitle.Text = valid ? name + "  TOTAL CAPACITY" : "DRIVE CAPACITY UNAVAILABLE";
+        TotalSpace.Text = valid ? Entry.Format(total) : "—";
+        UsedSpace.Text = valid ? Entry.Format(total - free) : "—";
+        FreeSpace.Text = valid ? Entry.Format(free) : "—";
+        CapacityBar.Visibility = valid ? Visibility.Visible : Visibility.Collapsed;
+        UsedColumn.Width = new GridLength(valid ? (double)(total - free) / total : 0, GridUnitType.Star);
+        FreeColumn.Width = new GridLength(valid ? (double)free / total : 1, GridUnitType.Star);
+    }
     private void StopScan(object sender, RoutedEventArgs e) { cancellation?.Cancel(); Stop.IsEnabled = false; }
     private void ShowFolder(Entry node)
     {
@@ -58,9 +87,11 @@ public partial class MainWindow : Window
         if (synchronizing) return;
         synchronizing = true;
         if (selectedFolder != null) selectedFolder.IsSelected = false;
-        for (var ancestor = node.Parent; ancestor != null; ancestor = ancestor.Parent) ancestor.IsExpanded = true;
-        node.IsExpanded = true; node.IsSelected = true; selectedFolder = node;
-        current = node; CurrentPath.Text = node.Path; CurrentPath.ToolTip = node.Path;
+        var treeNode = node.IsGroup ? node.Parent! : node;
+        while (treeNode.IsGroup) treeNode = treeNode.Parent!;
+        for (var ancestor = treeNode.Parent; ancestor != null; ancestor = ancestor.Parent) ancestor.IsExpanded = true;
+        treeNode.IsExpanded = true; treeNode.IsSelected = true; selectedFolder = treeNode;
+        current = node; CurrentPath.Text = node.IsGroup ? node.Path + " › " + node.Name : node.Path; CurrentPath.ToolTip = node.Path;
         Files.ItemsSource = node.Children; Map.Show(node);
         synchronizing = false;
     }

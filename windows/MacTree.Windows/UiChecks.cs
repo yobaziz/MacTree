@@ -28,6 +28,7 @@ public partial class MainWindow
         var users = Dir("Users", root); File(users, "backup.zip", 20); File(users, "video.mkv", 12);
         var system = Dir("Windows", root); File(system, "system.dll", 24);
         void Sort(Entry n) { foreach (var c in n.Children.Where(x => x.IsDirectory)) Sort(c); n.Children.Sort((a, b) => b.Bytes.CompareTo(a.Bytes)); }
+        for (int i = 0; i < 40; i++) File(Dir("Small folder " + i, root), "data.bin", 1);
         Sort(root);
         LoadResult(new(root, 0, TimeSpan.FromSeconds(2)));
         Require(root.IsExpanded && root.IsSelected, "Root must open automatically");
@@ -37,14 +38,30 @@ public partial class MainWindow
         Require(rootItem != null && rootItem.IsExpanded, "Expanded root container must render");
         rootItem!.IsSelected = true; UpdateLayout();
         Require(ReferenceEquals(current, root), "Tree selection must update file list/map");
-        ShowFolder(programs); UpdateLayout();
+        capacityVersion++;
+        SetCapacity("C:\\", 1000, 250);
+        Require(UsedSpace.Text == Entry.Format(750) && FreeSpace.Text == Entry.Format(250), "Volume used/free accounting");
+        SetCapacity("C:\\", 1000, 0);
+        Require(FreeColumn.Width.Value == 0, "Full disk bar");
+        SetCapacity("C:\\", 1000, 1000);
+        Require(UsedColumn.Width.Value == 0, "Empty disk bar");
+        SetCapacity(null, 0, 0);
+        Require(CapacityBar.Visibility == Visibility.Collapsed && TotalSpace.Text == "—", "Unavailable drive");
+        SetCapacity("C:\\", 512L * 1024 * 1024 * 1024, 120L * 1024 * 1024 * 1024);
+        ShowFolder(root); UpdateLayout();
         Location.Text = @"C:\";
         Summary.Text = $"{root.Size} logical  ·  {root.Files:N0} files  ·  Demo fixture for UI validation";
         Status.Text = "UI test fixture · Standard folder scanner · Logical sizes";
         Capture("ui-programs.png");
-        Require(Map.TileCount >= 12 && Map.FileTileCount >= 5, "Map must show nested contents, not one Steam block");
+        Require(Map.TileCount >= 2 && Map.TileCount <= 10 && Map.RepresentedBytes == root.Bytes, "Crowded chart preserves sizes in readable rows");
+        var group = Map.Group;
+        Require(group != null, "Small items must have a named group");
+        Map.Navigate!(group!); UpdateLayout(); Capture("ui-group.png");
+        Require(ReferenceEquals(current, group) && Map.RepresentedBytes == group!.Bytes, "Grouped rows are navigable with complete totals");
+        GoUp(this, new RoutedEventArgs());
+        Require(ReferenceEquals(current, root), "Group up returns to parent");
         ShowFolder(common); UpdateLayout(); Capture("ui-games.png");
-        Require(Map.FileTileCount >= 7, "Game folders must expose file-type tiles");
+        Require(Map.TileCount == 3 && Map.RepresentedBytes == common.Bytes, "Game names have separate readable rows");
         GoUp(this, new RoutedEventArgs());
         Require(ReferenceEquals(current, apps) && apps.IsSelected, "Up must synchronize tree");
     }
