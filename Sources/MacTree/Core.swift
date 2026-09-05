@@ -27,6 +27,7 @@ struct MTProgress: Sendable {
 }
 
 struct MTSnapshot: Sendable {
+    let skippedDirectories: UInt64
     let nodes: [MTNode]
     let rootID: Int
     let items: UInt64
@@ -55,27 +56,6 @@ func mtResolvedPath(_ nodeID: Int, nodes: [MTNode]) -> String {
 
 func mtResolvedPath(_ node: MTNode, nodes: [MTNode]) -> String {
     mtResolvedPath(node.id, nodes: nodes)
-}
-
-/// Best-effort Full Disk Access probe. TCC itself is protected, while Mail,
-/// Messages and Safari are useful fallbacks on machines where those folders exist.
-func mtHasFullDiskAccess() -> Bool {
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let candidates = [
-        "/Library/Application Support/com.apple.TCC/TCC.db",
-        home + "/Library/Mail",
-        home + "/Library/Messages",
-        home + "/Library/Safari"
-    ]
-
-    for path in candidates where FileManager.default.fileExists(atPath: path) {
-        let fd = path.withCString { Darwin.open($0, O_RDONLY) }
-        if fd >= 0 {
-            Darwin.close(fd)
-            return true
-        }
-    }
-    return false
 }
 
 // MARK: - Search
@@ -457,3 +437,4 @@ func mtFileTypeLabel(_ node: MTNode) -> String {
 func mtBytes(_ value: UInt64) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file)
 }
+
