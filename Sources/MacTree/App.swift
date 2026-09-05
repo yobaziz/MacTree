@@ -49,6 +49,8 @@ func mtApplyAppearance(_ rawValue: String) {
 }
 
 private let mtTurkishStrings: [String: String] = [
+    "Unreadable folders": "Okunamayan klasörler",
+    "Scan is incomplete. Sizes exclude unreadable contents.": "Tarama eksik. Boyutlara okunamayan içerikler dahil değil.",
     "Settings": "Ayarlar",
     "General": "Genel",
     "Language": "Dil",
@@ -245,6 +247,12 @@ struct MainView: View {
             toolbar
             Divider()
             summary
+            if controller.skippedDirectories > 0 {
+                Text(mtL("Unreadable folders") + ": \(controller.skippedDirectories) — " + mtL("Scan is incomplete. Sizes exclude unreadable contents."))
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+                    .padding(8)
+            }
             Divider()
 
             VSplitView {

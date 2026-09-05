@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import AppKit
 import Darwin
 
@@ -54,6 +55,7 @@ actor MTFastScanner {
         directoryQueue.reserveCapacity(rootPath == "/" ? 150_000 : 60_000)
         var queueIndex = 0
 
+        var skippedDirectories: UInt64 = 0
         var items: UInt64 = 0
         var files: UInt64 = 0
         var logical: UInt64 = 0
@@ -72,15 +74,11 @@ actor MTFastScanner {
             let directoryPath = builders[parentID].path
             currentPath = directoryPath
 
-            // macOS privacy-protected locations (Desktop, Documents, Downloads,
-            // app data, etc.) may otherwise trigger a consent dialog when opened.
-            // isReadableFile(atPath:) lets us test access without causing that
-            // consent prompt. If access is already granted (for example via Full
-            // Disk Access), the directory is scanned normally; otherwise it is
-            // skipped and remains represented by the disk's unmapped space.
-            guard FileManager.default.isReadableFile(atPath: directoryPath) else { continue }
-
-            let usedBulk = enumerateBulk(path: directoryPath, buffer: &bulkBuffer) { entry in
+            // Do not probe unrelated protected folders to infer privacy grants.
+            // Access only the selected scan tree and report incomplete coverage.
+            let usedBulk: Bool
+            do {
+                usedBulk = try enumerateBulk(path: directoryPath, buffer: &bulkBuffer) { entry in
                 if Task.isCancelled { return false }
                 guard entry.name != ".", entry.name != ".." else { return true }
 
@@ -132,8 +130,21 @@ actor MTFastScanner {
                 return true
             }
 
+            } catch {
+                if parentID == 0 { throw error }
+                skippedDirectories += 1
+                continue
+            }
+
             if !usedBulk {
-                let names = (try? FileManager.default.contentsOfDirectory(atPath: directoryPath)) ?? []
+                let names: [String]
+                do {
+                    names = try FileManager.default.contentsOfDirectory(atPath: directoryPath)
+                } catch {
+                    if parentID == 0 { throw error }
+                    skippedDirectories += 1
+                    continue
+                }
                 for name in names {
                     if Task.isCancelled { throw CancellationError() }
                     guard name != ".", name != ".." else { continue }
@@ -225,13 +236,16 @@ actor MTFastScanner {
             MTProgress(items: items, files: files, logical: logical, allocated: allocated,
                        currentPath: currentPath, elapsed: elapsed)
         )
-        return MTSnapshot(nodes: nodes, rootID: 0, items: items, files: files,
+        return MTSnapshot(skippedDirectories: skippedDirectories, nodes: nodes, rootID: 0, items: items, files: files,
                           logical: logical, allocated: allocated, elapsed: elapsed)
     }
 
-    private func enumerateBulk(path: String, buffer: inout [UInt8], consume: (BulkEntry) -> Bool) -> Bool {
+    private func enumerateBulk(path: String, buffer: inout [UInt8], consume: (BulkEntry) -> Bool) throws -> Bool {
         let fd = path.withCString { Darwin.open($0, O_RDONLY) }
-        guard fd >= 0 else { return true }
+        guard fd >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                          userInfo: [NSFilePathErrorKey: path])
+        }
         defer { Darwin.close(fd) }
 
         var attributes = attrlist()
@@ -254,7 +268,12 @@ actor MTFastScanner {
             }
 
             if count == 0 { return true }
-            if count < 0 { return gotAnyBatch }
+            if count < 0 {
+                let code = errno
+                if !gotAnyBatch && (code == ENOTSUP || code == EINVAL || code == ENOSYS) { return false }
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(code),
+                              userInfo: [NSFilePathErrorKey: path])
+            }
             gotAnyBatch = true
 
             let shouldContinue = buffer.withUnsafeBytes { raw -> Bool in
@@ -382,16 +401,16 @@ final class MTFastController: ObservableObject {
     @Published var isScanning = false
     @Published var scanVersion = 0
     @Published var errorMessage: String?
-    @Published var fullDiskAccess = false
+    @Published var skippedDirectories: UInt64 = 0
     @Published var volumeTotal: UInt64 = 0
     @Published var volumeFree: UInt64 = 0
 
     let search = MTSearchModel()
     private let scanner = MTFastScanner()
     private var task: Task<Void, Never>?
+    private var scanGeneration = UUID()
 
     init() {
-        refreshFullDiskAccess()
         refreshVolumeSpace()
     }
 
@@ -418,10 +437,6 @@ final class MTFastController: ObservableObject {
         }
     }
 
-    func refreshFullDiskAccess() {
-        fullDiskAccess = mtHasFullDiskAccess()
-    }
-
     func refreshVolumeSpace() {
         do {
             let values = try rootURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey])
@@ -440,6 +455,9 @@ final class MTFastController: ObservableObject {
 
     func start() {
         task?.cancel()
+        let generation = UUID()
+        scanGeneration = generation
+        skippedDirectories = 0
         refreshVolumeSpace()
         nodes = []
         search.setNodes([])
@@ -458,6 +476,7 @@ final class MTFastController: ObservableObject {
             do {
                 let snapshot = try await scanner.scan(root: selected) { update in
                     await MainActor.run {
+                        guard self.scanGeneration == generation else { return }
                         self.items = update.items
                         self.files = update.files
                         self.logical = update.logical
@@ -467,12 +486,14 @@ final class MTFastController: ObservableObject {
                     }
                 }
 
+                guard self.scanGeneration == generation else { return }
                 guard !Task.isCancelled else {
                     self.isScanning = false
                     self.task = nil
                     return
                 }
 
+                self.skippedDirectories = snapshot.skippedDirectories
                 self.nodes = snapshot.nodes
                 self.rootID = snapshot.rootID
                 self.items = snapshot.items
@@ -482,20 +503,22 @@ final class MTFastController: ObservableObject {
                 self.elapsed = snapshot.elapsed
                 self.search.setNodes(snapshot.nodes)
                 self.refreshVolumeSpace()
-                self.refreshFullDiskAccess()
                 self.scanVersion += 1
             } catch is CancellationError {
             } catch {
-                if !Task.isCancelled { self.errorMessage = error.localizedDescription }
+                if !Task.isCancelled && self.scanGeneration == generation { self.errorMessage = error.localizedDescription }
             }
+            guard self.scanGeneration == generation else { return }
             self.isScanning = false
             self.task = nil
         }
     }
 
     func stop() {
+        scanGeneration = UUID()
         task?.cancel()
         task = nil
         isScanning = false
     }
 }
+

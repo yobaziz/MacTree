@@ -11,6 +11,11 @@ let package = Package(
         .executableTarget(
             name: "MacTree",
             path: "Sources/MacTree",
+            exclude: ["MacTreeApp.swift", "MacTreeV4.swift", "MacTreeV5.swift",
+                      "MacTreeV6.swift", "MacTreeV7.swift", "MacTreeV8.swift",
+                      "MacTreeV9.swift", "ConcurrencyCompat.swift"],
+            sources: ["App.swift", "Core.swift", "FastScanner.swift", "Tree.swift",
+                      "Treemap.swift", "VTypeCompat.swift"],
             swiftSettings: [
                 .unsafeFlags(["-Xfrontend", "-strict-concurrency=minimal"])
             ]
@@ -18,3 +23,4 @@ let package = Package(
     ],
     swiftLanguageVersions: [.v5]
 )
+

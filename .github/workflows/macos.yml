@@ -1,0 +1,20 @@
+name: macOS build
+on:
+  push:
+    branches: [main, 'fix/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and package universal macOS app
+        run: bash scripts/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacTree-macOS
+          path: dist/
+          if-no-files-found: error

@@ -11,62 +11,6 @@ extension UInt32 {
     }
 }
 
-// MARK: - Stable permission probe
-
-/// Uses protected user-library directories rather than merely checking whether a
-/// directory exists. Listing one of these locations is a better signal that TCC
-/// Full Disk Access is actually active for the current executable.
-func mtStableHasFullDiskAccess() -> Bool {
-    let fm = FileManager.default
-    let home = fm.homeDirectoryForCurrentUser.path
-    let protectedDirectories = [
-        home + "/Library/Mail",
-        home + "/Library/Messages",
-        home + "/Library/Safari"
-    ]
-
-    var foundProbe = false
-    for path in protectedDirectories where fm.fileExists(atPath: path) {
-        foundProbe = true
-        do {
-            _ = try fm.contentsOfDirectory(atPath: path)
-            return true
-        } catch {
-            let ns = error as NSError
-            if mtPermissionError(ns) { return false }
-        }
-    }
-
-    // Some clean machines do not have Mail/Messages/Safari data yet. Keep the
-    // TCC database as a last-resort probe in that case.
-    if !foundProbe {
-        let tcc = "/Library/Application Support/com.apple.TCC/TCC.db"
-        let fd = tcc.withCString { Darwin.open($0, O_RDONLY) }
-        if fd >= 0 {
-            Darwin.close(fd)
-            return true
-        }
-    }
-    return false
-}
-
-private func mtPermissionError(_ error: NSError) -> Bool {
-    if error.domain == NSPOSIXErrorDomain && (error.code == Int(EACCES) || error.code == Int(EPERM)) {
-        return true
-    }
-    if error.domain == NSCocoaErrorDomain {
-        let permissionCodes: Set<Int> = [
-            CocoaError.Code.fileReadNoPermission.rawValue,
-            CocoaError.Code.fileWriteNoPermission.rawValue
-        ]
-        if permissionCodes.contains(error.code) { return true }
-    }
-    if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
-        return mtPermissionError(underlying)
-    }
-    return false
-}
-
 // MARK: - File actions that do not require Finder Automation permission
 
 @MainActor
@@ -256,3 +200,4 @@ private func mtActionL(_ english: String, _ turkish: String) -> String {
     let language = UserDefaults.standard.string(forKey: "mactree.language") ?? "en"
     return language == "tr" ? turkish : english
 }
+
