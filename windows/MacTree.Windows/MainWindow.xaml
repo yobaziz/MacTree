@@ -12,7 +12,7 @@
     </Grid>
     <Grid Margin="0,10,0,0" Height="9" x:Name="CapacityBar"><Grid.ColumnDefinitions><ColumnDefinition x:Name="UsedColumn" Width="0*"/><ColumnDefinition x:Name="FreeColumn" Width="1*"/></Grid.ColumnDefinitions><Border Background="#2563EB"/><Border Grid.Column="1" Background="#34D399"/></Grid>
     <TextBlock Text="Drive usage from Windows · Scanned file sizes are shown separately below" Foreground="#64748B" FontSize="11" Margin="0,7,0,0"/>
-   </StackPanel>
+   </StackPanel></Border>
    <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,14,0,14"><TextBlock x:Name="Summary" Text="Choose a folder or enter a drive to explore your storage." FontWeight="SemiBold" TextWrapping="Wrap"/></Border>
    <ProgressBar x:Name="Busy" Height="3" Visibility="Collapsed" IsIndeterminate="True"/>
   </StackPanel>
