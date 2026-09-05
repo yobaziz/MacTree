@@ -8,6 +8,18 @@ mkdir -p dist
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 ditto build/Build/Products/Release/MacTree.app "$stage/MacTree.app"
+# Build all standard Dock/Finder icon sizes from the approved source artwork.
+iconset="$stage/AppIcon.iconset"
+mkdir -p "$iconset"
+for size in 16 32 128 256 512; do
+  sips -z "$size" "$size" Resources/AppIcon.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+  doubled=$((size * 2))
+  sips -z "$doubled" "$doubled" Resources/AppIcon.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+mkdir -p "$stage/MacTree.app/Contents/Resources"
+iconutil -c icns "$iconset" -o "$stage/MacTree.app/Contents/Resources/AppIcon.icns"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleIconFile string AppIcon' "$stage/MacTree.app/Contents/Info.plist"
+rm -rf "$iconset"
 # Ad-hoc signing makes a testable bundle, not a notarized distribution.
 # Set MACTREE_SIGN_IDENTITY to an installed Developer ID for release signing.
 codesign --force --options runtime --timestamp=none \
